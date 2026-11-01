@@ -7,196 +7,210 @@ local TweenService = game:GetService("TweenService")
 local Player = Players.LocalPlayer
 local PlayerGui = Player:WaitForChild("PlayerGui")
 
-local KEY = "MT_HYBRID_2026_X9"
-local function enc(s,k)
-    local t={}
-    for i=1,#s do
-        t[i]=bit32.bxor(string.byte(s,i),string.byte(k,(i-1)%#k+1))
-    end
-    return t
-end
-
-local function dec(t,k)
-    local s={}
-    for i,v in ipairs(t) do
-        s[i]=string.char(bit32.bxor(v,string.byte(k,(i-1)%#k+1)))
-    end
-    return table.concat(s)
-end
-
-local function integrity()
-    return type(enc)=="function"
-        and type(dec)=="function"
-        and #KEY==14
-end
-
-if not integrity() then return end
-
-local CK="MT_COLOR"
-
-local function color(r,g,b)
-    return Color3.fromRGB(
-        bit32.bxor(r,string.byte(CK,1)),
-        bit32.bxor(g,string.byte(CK,2)),
-        bit32.bxor(b,string.byte(CK,3))
-    )
-end
-
-local C={
-    bg=color(76,63,73),
-    panel=color(67,63,73),
-    accent=color(10,172,190),
-    text=color(54,54,63),
-    button=color(65,62,73),
-    green=color(45,46,63),
-    red=color(63,56,47),
+local CONFIG = {
+    Speed = 65,
+    MinSpeed = 10,
+    MaxSpeed = 200
 }
 
-local L={
-TR={
-title="MULTI TOOL",subtitle="OYUN KONTROL MERKEZI",
-fly="Uçuş Sistemi",clip="NoClip Sistemi",
-speed="Uçuş Hızı",language="Dil Seçimi",
-on="AÇIK",off="KAPALI",
-controls="Kontroller",
-info="WASD: Hareket | Space: Yüksel | Ctrl: Alçal",
-ready="Sistem Hazır"
-},
-EN={
-title="MULTI TOOL",subtitle="GAME CONTROL CENTER",
-fly="Fly System",clip="NoClip System",
-speed="Flight Speed",language="Language",
-on="ON",off="OFF",controls="Controls",
-info="WASD: Move | Space: Up | Ctrl: Down",
-ready="System Ready"
-},
-DE={
-title="MULTI TOOL",subtitle="SPIELSTEUERUNG",
-fly="Flugsystem",clip="NoClip",
-speed="Fluggeschwindigkeit",language="Sprache",
-on="AN",off="AUS",controls="Steuerung",
-info="WASD: Bewegen | Space: Hoch | Ctrl: Runter",
-ready="System bereit"
-},
-FR={
-title="MULTI TOOL",subtitle="CENTRE DE CONTROLE",
-fly="Vol",clip="NoClip",
-speed="Vitesse de vol",language="Langue",
-on="ACTIF",off="INACTIF",controls="Commandes",
-info="WASD: Bouger | Space: Monter | Ctrl: Descendre",
-ready="Système prêt"
-},
-ES={
-title="MULTI TOOL",subtitle="CENTRO DE CONTROL",
-fly="Vuelo",clip="NoClip",
-speed="Velocidad",language="Idioma",
-on="ACTIVO",off="INACTIVO",controls="Controles",
-info="WASD: Mover | Space: Subir | Ctrl: Bajar",
-ready="Sistema listo"
-}}
-
-local State={
-Fly=false,
-NoClip=false,
-Language="TR",
-Speed=65,
-Minimized=false
+local State = {
+    Fly = false,
+    NoClip = false,
+    Language = "TR",
+    Minimized = false
 }
 
-local function tr(k)
-    return L[State.Language][k] or k
+local Languages = {
+TR = {
+    title="MULTI TOOL",
+    subtitle="OYUN KONTROL MERKEZI",
+    fly="Uçuş Sistemi",
+    clip="NoClip Sistemi",
+    speed="Uçuş Hızı",
+    language="Dil Seçimi",
+    on="AÇIK",
+    off="KAPALI",
+    info="WASD: Hareket | Space: Yüksel | Ctrl: Alçal"
+},
+EN = {
+    title="MULTI TOOL",
+    subtitle="GAME CONTROL CENTER",
+    fly="Fly System",
+    clip="NoClip System",
+    speed="Flight Speed",
+    language="Language",
+    on="ON",
+    off="OFF",
+    info="WASD: Move | Space: Up | Ctrl: Down"
+},
+DE = {
+    title="MULTI TOOL",
+    subtitle="SPIELSTEUERUNG",
+    fly="Flugsystem",
+    clip="NoClip System",
+    speed="Fluggeschwindigkeit",
+    language="Sprache",
+    on="AN",
+    off="AUS",
+    info="WASD: Bewegen | Space: Hoch | Ctrl: Runter"
+},
+FR = {
+    title="MULTI TOOL",
+    subtitle="CENTRE DE CONTROLE",
+    fly="Vol",
+    clip="NoClip",
+    speed="Vitesse de vol",
+    language="Langue",
+    on="ACTIF",
+    off="INACTIF",
+    info="WASD: Bouger | Space: Monter | Ctrl: Descendre"
+},
+ES = {
+    title="MULTI TOOL",
+    subtitle="CENTRO DE CONTROL",
+    fly="Vuelo",
+    clip="NoClip",
+    speed="Velocidad",
+    language="Idioma",
+    on="ACTIVO",
+    off="INACTIVO",
+    info="WASD: Mover | Space: Subir | Ctrl: Bajar"
+}
+}
+
+local function tr(key)
+    return Languages[State.Language][key] or key
 end
 
-local Character,Humanoid,Root
-local Velocity,Gyro
-local FlyConnection,ClipConnection
-local Keys={}
+local Colors = {
+    Background = Color3.fromRGB(13,18,30),
+    Panel = Color3.fromRGB(23,32,49),
+    Button = Color3.fromRGB(31,45,67),
+    Accent = Color3.fromRGB(0,160,255),
+    Text = Color3.fromRGB(240,245,255),
+    Muted = Color3.fromRGB(145,165,190),
+    Green = Color3.fromRGB(35,190,120),
+    Red = Color3.fromRGB(220,75,85)
+}
+
+local Character
+local Humanoid
+local Root
+
+local Velocity
+local Gyro
+local FlyConnection
+local ClipConnection
+
+local Keys = {}
+local OriginalCollision = {}
 
 local function stopFly()
-    State.Fly=false
+    State.Fly = false
+
     if FlyConnection then
         FlyConnection:Disconnect()
-        FlyConnection=nil
+        FlyConnection = nil
     end
-    if Velocity then Velocity:Destroy() Velocity=nil end
-    if Gyro then Gyro:Destroy() Gyro=nil end
+
+    if Velocity then
+        Velocity:Destroy()
+        Velocity = nil
+    end
+
+    if Gyro then
+        Gyro:Destroy()
+        Gyro = nil
+    end
+
     if Humanoid then
-        Humanoid.PlatformStand=false
+        Humanoid.PlatformStand = false
         Humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
     end
 end
 
+local function stopClip()
+    State.NoClip = false
+
+    if ClipConnection then
+        ClipConnection:Disconnect()
+        ClipConnection = nil
+    end
+
+    for part, original in pairs(OriginalCollision) do
+        if part and part.Parent then
+            part.CanCollide = original
+        end
+    end
+
+    table.clear(OriginalCollision)
+end
+
 local function startFly()
-    if not Root or not Humanoid or Humanoid.Health<=0 then return end
+    if not Root or not Humanoid or Humanoid.Health <= 0 then
+        return
+    end
+
     if State.Fly then return end
 
-    State.Fly=true
-    Velocity=Instance.new("BodyVelocity")
-    Velocity.MaxForce=Vector3.new(1e6,1e6,1e6)
-    Velocity.Velocity=Vector3.zero
-    Velocity.Parent=Root
+    State.Fly = true
 
-    Gyro=Instance.new("BodyGyro")
-    Gyro.MaxTorque=Vector3.new(1e6,1e6,1e6)
-    Gyro.P=10000
-    Gyro.Parent=Root
+    Velocity = Instance.new("BodyVelocity")
+    Velocity.MaxForce = Vector3.new(1000000,1000000,1000000)
+    Velocity.Velocity = Vector3.zero
+    Velocity.Parent = Root
 
-    Humanoid.PlatformStand=true
+    Gyro = Instance.new("BodyGyro")
+    Gyro.MaxTorque = Vector3.new(1000000,1000000,1000000)
+    Gyro.P = 10000
+    Gyro.Parent = Root
 
-    FlyConnection=RunService.RenderStepped:Connect(function()
+    Humanoid.PlatformStand = true
+
+    FlyConnection = RunService.RenderStepped:Connect(function()
         if not State.Fly or not Root or not Root.Parent then
             stopFly()
             return
         end
 
-        local camera=workspace.CurrentCamera
-        local move=Vector3.zero
+        local camera = workspace.CurrentCamera
+        if not camera then return end
 
-        if Keys.W then move+=camera.CFrame.LookVector end
-        if Keys.S then move-=camera.CFrame.LookVector end
-        if Keys.A then move-=camera.CFrame.RightVector end
-        if Keys.D then move+=camera.CFrame.RightVector end
-        if Keys.Space then move+=Vector3.yAxis end
-        if Keys.LeftControl or Keys.RightControl then
-            move-=Vector3.yAxis
+        local direction = Vector3.zero
+
+        if Keys.W then direction += camera.CFrame.LookVector end
+        if Keys.S then direction -= camera.CFrame.LookVector end
+        if Keys.A then direction -= camera.CFrame.RightVector end
+        if Keys.D then direction += camera.CFrame.RightVector end
+        if Keys.Up then direction += Vector3.yAxis end
+        if Keys.Down then direction -= Vector3.yAxis end
+
+        if direction.Magnitude > 0 then
+            direction = direction.Unit
         end
 
-        if move.Magnitude>0 then
-            move=move.Unit
-        end
+        Velocity.Velocity = direction * CONFIG.Speed
 
-        Velocity.Velocity=move*State.Speed
-        Gyro.CFrame=camera.CFrame
+        local look = camera.CFrame.LookVector
+        Gyro.CFrame = CFrame.lookAt(Root.Position, Root.Position + look)
     end)
 end
 
-local function stopClip()
-    State.NoClip=false
-    if ClipConnection then
-        ClipConnection:Disconnect()
-        ClipConnection=nil
-    end
-
-    if Character then
-        for _,part in ipairs(Character:GetDescendants()) do
-            if part:IsA("BasePart") then
-                part.CanCollide=true
-            end
-        end
-    end
-end
-
 local function startClip()
-    if not Character then return end
-    if State.NoClip then return end
+    if not Character or State.NoClip then return end
 
-    State.NoClip=true
+    State.NoClip = true
 
-    ClipConnection=RunService.Stepped:Connect(function()
-        if not State.NoClip or not Character then return end
-        for _,part in ipairs(Character:GetDescendants()) do
+    ClipConnection = RunService.Stepped:Connect(function()
+        if not Character then return end
+
+        for _, part in ipairs(Character:GetDescendants()) do
             if part:IsA("BasePart") then
-                part.CanCollide=false
+                if OriginalCollision[part] == nil then
+                    OriginalCollision[part] = part.CanCollide
+                end
+
+                part.CanCollide = false
             end
         end
     end)
@@ -206,9 +220,9 @@ local function setupCharacter(char)
     stopFly()
     stopClip()
 
-    Character=char
-    Humanoid=char:WaitForChild("Humanoid")
-    Root=char:WaitForChild("HumanoidRootPart")
+    Character = char
+    Humanoid = char:WaitForChild("Humanoid")
+    Root = char:WaitForChild("HumanoidRootPart")
 
     Humanoid.Died:Connect(function()
         stopFly()
@@ -216,244 +230,290 @@ local function setupCharacter(char)
     end)
 end
 
-if Player.Character then
-    setupCharacter(Player.Character)
-end
-
 Player.CharacterAdded:Connect(setupCharacter)
 
-local old=PlayerGui:FindFirstChild("MultiToolGui")
-if old then old:Destroy() end
-
-local Gui=Instance.new("ScreenGui")
-Gui.Name="MultiToolGui"
-Gui.ResetOnSpawn=false
-Gui.Parent=PlayerGui
-
-local Main=Instance.new("Frame")
-Main.Size=UDim2.fromOffset(350,450)
-Main.Position=UDim2.new(.5,-175,.5,-225)
-Main.BackgroundColor3=C.bg
-Main.BorderSizePixel=0
-Main.Parent=Gui
-
-Instance.new("UICorner",Main).CornerRadius=UDim.new(0,15)
-
-local Stroke=Instance.new("UIStroke")
-Stroke.Color=C.accent
-Stroke.Thickness=1.5
-Stroke.Parent=Main
-
-local function label(parent,text,size,pos,height)
-    local obj=Instance.new("TextLabel")
-    obj.Size=UDim2.new(1,-30,0,height or 30)
-    obj.Position=pos
-    obj.BackgroundTransparency=1
-    obj.Text=text
-    obj.TextColor3=C.text
-    obj.TextSize=size
-    obj.Font=Enum.Font.GothamMedium
-    obj.TextXAlignment=Enum.TextXAlignment.Left
-    obj.Parent=parent
-    return obj
+if Player.Character then
+    task.spawn(setupCharacter, Player.Character)
 end
 
-local Header=label(Main,tr("title"),23,UDim2.fromOffset(16,10),35)
-Header.Font=Enum.Font.GothamBold
-Header.TextColor3=C.accent
+local Previous = PlayerGui:FindFirstChild("MultiToolGui")
+if Previous then Previous:Destroy() end
 
-local Subtitle=label(Main,tr("subtitle"),10,UDim2.fromOffset(17,43),20)
+local Gui = Instance.new("ScreenGui")
+Gui.Name = "MultiToolGui"
+Gui.ResetOnSpawn = false
+Gui.IgnoreGuiInset = false
+Gui.DisplayOrder = 50
+Gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+Gui.Parent = PlayerGui
 
-local Minimize=Instance.new("TextButton")
-Minimize.Size=UDim2.fromOffset(32,30)
-Minimize.Position=UDim2.new(1,-45,0,12)
-Minimize.Text="—"
-Minimize.TextColor3=C.text
-Minimize.BackgroundColor3=C.button
-Minimize.Parent=Main
-Instance.new("UICorner",Minimize).CornerRadius=UDim.new(0,8)
+local Main = Instance.new("Frame")
+Main.Name = "Main"
+Main.Size = UDim2.fromOffset(350,430)
+Main.Position = UDim2.new(0.5,-175,0.5,-215)
+Main.BackgroundColor3 = Colors.Background
+Main.BorderSizePixel = 0
+Main.Parent = Gui
 
-local function button(text,y)
-    local b=Instance.new("TextButton")
-    b.Size=UDim2.new(1,-30,0,43)
-    b.Position=UDim2.fromOffset(15,y)
-    b.BackgroundColor3=C.button
-    b.TextColor3=C.text
-    b.TextSize=13
-    b.Font=Enum.Font.GothamSemibold
-    b.Text=text
-    b.AutoButtonColor=false
-    b.Parent=Main
+Instance.new("UICorner",Main).CornerRadius = UDim.new(0,15)
 
-    Instance.new("UICorner",b).CornerRadius=UDim.new(0,9)
+local Outline = Instance.new("UIStroke")
+Outline.Color = Colors.Accent
+Outline.Thickness = 1.5
+Outline.Parent = Main
+
+local function createLabel(parent,text,size,position,height)
+    local object = Instance.new("TextLabel")
+    object.Size = UDim2.new(1,-30,0,height or 30)
+    object.Position = position
+    object.BackgroundTransparency = 1
+    object.Text = text
+    object.TextColor3 = Colors.Text
+    object.TextSize = size
+    object.Font = Enum.Font.GothamMedium
+    object.TextXAlignment = Enum.TextXAlignment.Left
+    object.Parent = parent
+    return object
+end
+
+local Header = createLabel(Main,"MULTI TOOL",23,UDim2.fromOffset(16,10),35)
+Header.Font = Enum.Font.GothamBold
+Header.TextColor3 = Colors.Accent
+
+local Subtitle = createLabel(Main,"",10,UDim2.fromOffset(17,43),20)
+Subtitle.TextColor3 = Colors.Muted
+
+local Minimize = Instance.new("TextButton")
+Minimize.Size = UDim2.fromOffset(35,30)
+Minimize.Position = UDim2.new(1,-45,0,12)
+Minimize.BackgroundColor3 = Colors.Button
+Minimize.Text = "—"
+Minimize.TextColor3 = Colors.Text
+Minimize.TextSize = 20
+Minimize.Parent = Main
+Instance.new("UICorner",Minimize).CornerRadius = UDim.new(0,7)
+
+local Content = Instance.new("Frame")
+Content.Size = UDim2.new(1,0,1,-65)
+Content.Position = UDim2.fromOffset(0,65)
+Content.BackgroundTransparency = 1
+Content.Parent = Main
+
+local function createButton(text,y)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(1,-30,0,43)
+    b.Position = UDim2.fromOffset(15,y)
+    b.BackgroundColor3 = Colors.Button
+    b.TextColor3 = Colors.Text
+    b.TextSize = 13
+    b.Font = Enum.Font.GothamSemibold
+    b.Text = text
+    b.AutoButtonColor = false
+    b.Parent = Content
+
+    Instance.new("UICorner",b).CornerRadius = UDim.new(0,9)
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Colors.Panel
+    stroke.Thickness = 1
+    stroke.Parent = b
 
     b.MouseEnter:Connect(function()
-        TweenService:Create(b,TweenInfo.new(.15),{
-            BackgroundColor3=C.panel
+        TweenService:Create(b,TweenInfo.new(0.15),{
+            BackgroundColor3 = Colors.Panel
         }):Play()
     end)
 
     b.MouseLeave:Connect(function()
-        TweenService:Create(b,TweenInfo.new(.15),{
-            BackgroundColor3=C.button
+        TweenService:Create(b,TweenInfo.new(0.15),{
+            BackgroundColor3 = Colors.Button
         }):Play()
     end)
 
     return b
 end
 
-local FlyButton=button("",85)
-local ClipButton=button("",138)
+local FlyButton = createButton("",5)
+local ClipButton = createButton("",57)
 
-local SpeedLabel=label(Main,"",13,UDim2.fromOffset(16,195),25)
+local SpeedLabel = createLabel(Content,"",13,UDim2.fromOffset(16,108),25)
 
-local SpeedDown=button("-",225)
-local SpeedUp=button("+",275)
+local SpeedMinus = createButton("-",137)
+local SpeedPlus = createButton("+",189)
 
-local LanguageLabel=label(Main,"",13,UDim2.fromOffset(16,325),25)
-local LanguageButton=button("TR / EN / DE / FR / ES",355)
+local LanguageLabel = createLabel(Content,"",13,UDim2.fromOffset(16,241),25)
+local LanguageButton = createButton("TR / EN / DE / FR / ES",270)
 
-local Info=label(Main,"",10,UDim2.fromOffset(16,405),25)
-Info.TextColor3=Color3.fromRGB(150,170,195)
+local Info = createLabel(Content,"",10,UDim2.fromOffset(16,326),45)
+Info.TextColor3 = Colors.Muted
+Info.TextWrapped = true
 
 local function refresh()
-    FlyButton.Text=tr("fly").." : "..(State.Fly and tr("on") or tr("off"))
-    ClipButton.Text=tr("clip").." : "..(State.NoClip and tr("on") or tr("off"))
-    SpeedLabel.Text=tr("speed").." : "..State.Speed
-    LanguageLabel.Text=tr("language").." : "..State.Language
-    Info.Text=tr("info")
-    Header.Text=tr("title")
-    Subtitle.Text=tr("subtitle")
+    FlyButton.Text = tr("fly").." : "..(State.Fly and tr("on") or tr("off"))
+    ClipButton.Text = tr("clip").." : "..(State.NoClip and tr("on") or tr("off"))
+    SpeedLabel.Text = tr("speed").." : "..CONFIG.Speed
+    LanguageLabel.Text = tr("language").." : "..State.Language
+    Subtitle.Text = tr("subtitle")
+    Info.Text = tr("info")
+    Header.Text = tr("title")
+
+    FlyButton.BackgroundColor3 = State.Fly and Colors.Green or Colors.Button
+    ClipButton.BackgroundColor3 = State.NoClip and Colors.Green or Colors.Button
 end
 
-FlyButton.MouseButton1Click:Connect(function()
-    if State.Fly then stopFly() else startFly() end
-    refresh()
-end)
-
-ClipButton.MouseButton1Click:Connect(function()
-    if State.NoClip then stopClip() else startClip() end
-    refresh()
-end)
-
-SpeedDown.MouseButton1Click:Connect(function()
-    State.Speed=math.max(10,State.Speed-5)
-    refresh()
-end)
-
-SpeedUp.MouseButton1Click:Connect(function()
-    State.Speed=math.min(200,State.Speed+5)
-    refresh()
-end)
-
-local Languages={"TR","EN","DE","FR","ES"}
-LanguageButton.MouseButton1Click:Connect(function()
-    local index=table.find(Languages,State.Language) or 1
-    index=index%#Languages+1
-    State.Language=Languages[index]
-    refresh()
-end)
-
-Minimize.MouseButton1Click:Connect(function()
-    State.Minimized=not State.Minimized
-
-    TweenService:Create(Main,TweenInfo.new(.2),{
-        Size=State.Minimized and UDim2.fromOffset(350,55)
-        or UDim2.fromOffset(350,450)
-    }):Play()
-
-    for _,obj in ipairs(Main:GetChildren()) do
-        if obj~=Header and obj~=Subtitle and obj~=Minimize
-            and obj~=Stroke and not obj:IsA("UICorner")
-            and obj~=nil then
-            if obj:IsA("GuiObject") then
-                obj.Visible=not State.Minimized
-            end
-        end
+FlyButton.Activated:Connect(function()
+    if State.Fly then
+        stopFly()
+    else
+        startFly()
     end
+    refresh()
+end)
 
-    Header.Visible=true
-    Subtitle.Visible=not State.Minimized
+ClipButton.Activated:Connect(function()
+    if State.NoClip then
+        stopClip()
+    else
+        startClip()
+    end
+    refresh()
+end)
+
+SpeedMinus.Activated:Connect(function()
+    CONFIG.Speed = math.max(CONFIG.MinSpeed,CONFIG.Speed-5)
+    refresh()
+end)
+
+SpeedPlus.Activated:Connect(function()
+    CONFIG.Speed = math.min(CONFIG.MaxSpeed,CONFIG.Speed+5)
+    refresh()
+end)
+
+local LanguageList = {"TR","EN","DE","FR","ES"}
+
+LanguageButton.Activated:Connect(function()
+    local index = table.find(LanguageList,State.Language) or 1
+    index = index % #LanguageList + 1
+    State.Language = LanguageList[index]
+    refresh()
+end)
+
+Minimize.Activated:Connect(function()
+    State.Minimized = not State.Minimized
+
+    Content.Visible = not State.Minimized
+    Subtitle.Visible = not State.Minimized
+
+    TweenService:Create(Main,TweenInfo.new(0.2),{
+        Size = State.Minimized
+            and UDim2.fromOffset(350,55)
+            or UDim2.fromOffset(350,430)
+    }):Play()
 end)
 
 UIS.InputBegan:Connect(function(input,processed)
     if processed then return end
-    if input.KeyCode==Enum.KeyCode.W then Keys.W=true end
-    if input.KeyCode==Enum.KeyCode.A then Keys.A=true end
-    if input.KeyCode==Enum.KeyCode.S then Keys.S=true end
-    if input.KeyCode==Enum.KeyCode.D then Keys.D=true end
-    if input.KeyCode==Enum.KeyCode.Space then Keys.Space=true end
-    if input.KeyCode==Enum.KeyCode.LeftControl then Keys.LeftControl=true end
-    if input.KeyCode==Enum.KeyCode.RightControl then Keys.RightControl=true end
+
+    local key = input.KeyCode
+
+    if key == Enum.KeyCode.W then Keys.W = true end
+    if key == Enum.KeyCode.A then Keys.A = true end
+    if key == Enum.KeyCode.S then Keys.S = true end
+    if key == Enum.KeyCode.D then Keys.D = true end
+    if key == Enum.KeyCode.Space then Keys.Up = true end
+    if key == Enum.KeyCode.LeftControl or key == Enum.KeyCode.RightControl then
+        Keys.Down = true
+    end
 end)
 
 UIS.InputEnded:Connect(function(input)
-    if input.KeyCode==Enum.KeyCode.W then Keys.W=false end
-    if input.KeyCode==Enum.KeyCode.A then Keys.A=false end
-    if input.KeyCode==Enum.KeyCode.S then Keys.S=false end
-    if input.KeyCode==Enum.KeyCode.D then Keys.D=false end
-    if input.KeyCode==Enum.KeyCode.Space then Keys.Space=false end
-    if input.KeyCode==Enum.KeyCode.LeftControl then Keys.LeftControl=false end
-    if input.KeyCode==Enum.KeyCode.RightControl then Keys.RightControl=false end
+    local key = input.KeyCode
+
+    if key == Enum.KeyCode.W then Keys.W = false end
+    if key == Enum.KeyCode.A then Keys.A = false end
+    if key == Enum.KeyCode.S then Keys.S = false end
+    if key == Enum.KeyCode.D then Keys.D = false end
+    if key == Enum.KeyCode.Space then Keys.Up = false end
+    if key == Enum.KeyCode.LeftControl or key == Enum.KeyCode.RightControl then
+        Keys.Down = false
+    end
 end)
 
-local Mobile=UIS.TouchEnabled
+if UIS.TouchEnabled then
+    local Up = Instance.new("TextButton")
+    Up.Size = UDim2.fromOffset(55,50)
+    Up.Position = UDim2.new(1,-75,1,-175)
+    Up.Text = "▲"
+    Up.TextSize = 22
+    Up.TextColor3 = Colors.Text
+    Up.BackgroundColor3 = Colors.Button
+    Up.Parent = Gui
+    Instance.new("UICorner",Up).CornerRadius = UDim.new(0,12)
 
-if Mobile then
-    local Up=button("▲",85)
-    local Down=button("▼",138)
+    local Down = Instance.new("TextButton")
+    Down.Size = UDim2.fromOffset(55,50)
+    Down.Position = UDim2.new(1,-75,1,-115)
+    Down.Text = "▼"
+    Down.TextSize = 22
+    Down.TextColor3 = Colors.Text
+    Down.BackgroundColor3 = Colors.Button
+    Down.Parent = Gui
+    Instance.new("UICorner",Down).CornerRadius = UDim.new(0,12)
 
-    Up.Size=UDim2.fromOffset(55,45)
-    Up.Position=UDim2.new(1,-75,1,-160)
+    local function hold(button,key)
+        button.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.Touch
+                or input.UserInputType == Enum.UserInputType.MouseButton1 then
+                Keys[key] = true
+            end
+        end)
 
-    Down.Size=UDim2.fromOffset(55,45)
-    Down.Position=UDim2.new(1,-75,1,-105)
+        button.InputEnded:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.Touch
+                or input.UserInputType == Enum.UserInputType.MouseButton1 then
+                Keys[key] = false
+            end
+        end)
+    end
 
-    Up.MouseButton1Down:Connect(function()
-        Keys.Space=true
-    end)
-    Up.MouseButton1Up:Connect(function()
-        Keys.Space=false
-    end)
-    Down.MouseButton1Down:Connect(function()
-        Keys.LeftControl=true
-    end)
-    Down.MouseButton1Up:Connect(function()
-        Keys.LeftControl=false
-    end)
+    hold(Up,"Up")
+    hold(Down,"Down")
 end
 
-local dragging=false
-local dragStart,startPos
+local dragging = false
+local dragStart
+local startPosition
 
 Header.InputBegan:Connect(function(input)
-    if input.UserInputType==Enum.UserInputType.MouseButton1
-        or input.UserInputType==Enum.UserInputType.Touch then
-        dragging=true
-        dragStart=input.Position
-        startPos=Main.Position
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch then
+
+        dragging = true
+        dragStart = input.Position
+        startPosition = Main.Position
     end
 end)
 
 UIS.InputChanged:Connect(function(input)
     if dragging and (
-        input.UserInputType==Enum.UserInputType.MouseMovement
-        or input.UserInputType==Enum.UserInputType.Touch
+        input.UserInputType == Enum.UserInputType.MouseMovement
+        or input.UserInputType == Enum.UserInputType.Touch
     ) then
-        local delta=input.Position-dragStart
-        Main.Position=UDim2.new(
-            startPos.X.Scale,
-            startPos.X.Offset+delta.X,
-            startPos.Y.Scale,
-            startPos.Y.Offset+delta.Y
+        local delta = input.Position - dragStart
+
+        Main.Position = UDim2.new(
+            startPosition.X.Scale,
+            startPosition.X.Offset + delta.X,
+            startPosition.Y.Scale,
+            startPosition.Y.Offset + delta.Y
         )
     end
 end)
 
 UIS.InputEnded:Connect(function(input)
-    if input.UserInputType==Enum.UserInputType.MouseButton1
-        or input.UserInputType==Enum.UserInputType.Touch then
-        dragging=false
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
     end
 end)
 
