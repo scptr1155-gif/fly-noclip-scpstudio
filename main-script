@@ -283,7 +283,11 @@ local Hold = {}
 local Controls
 local Refresh
 local AutoRotateBackup = true
-local moveSign = nil
+local lastFlat = nil   -- kamera tam yukarı/aşağı bakarken son geçerli yatay yön
+local lastFacing = nil -- karakterin baktığı yön (gereksiz güncellemeyi önler)
+-- GetMoveVector() yorum modu (çalışma anında kalibre edilir):
+-- 1 = kamera-yerel ileri=-Z | 2 = kamera-yerel ileri=+Z | 3 = dünya-uzayı | 4 = eski düzen (X=ileri)
+local MOVE_MODE = 2
 
 task.spawn(function()
 	local ok, module = pcall(function()
@@ -323,6 +327,8 @@ local function stopFly()
 	end
 	FlyParts = {}
 	table.clear(Hold)
+	lastFacing = nil
+	lastFlat = nil
 
 	if Humanoid and Humanoid.Parent then
 		Humanoid[S.PLATFORMSTAND] = false
@@ -333,6 +339,42 @@ local function stopFly()
 			end)
 		end
 	end
+end
+
+-- Roblox'un GetMoveVector() eksen düzeni sürümden sürüme değişebiliyor.
+-- Bu yüzden birkaç yorum adayı üretilir; dünya-uzayındaki gerçek referansla
+-- (klavye veya Humanoid.MoveDirection) en tutarlı olan seçilir.
+local function moveCandidates(cf, ctrl)
+	return {
+		cf:VectorToWorldSpace(Vector3.new(ctrl.X, 0, ctrl.Z)),   -- 1: kamera-yerel, ileri = -Z
+		cf:VectorToWorldSpace(Vector3.new(ctrl.X, 0, -ctrl.Z)),  -- 2: kamera-yerel, ileri = +Z
+		Vector3.new(ctrl.X, 0, ctrl.Z),                          -- 3: dünya-uzayı
+		cf:VectorToWorldSpace(Vector3.new(ctrl.Z, 0, -ctrl.X)),  -- 4: eski düzen (X=ileri, Z=sağ)
+	}
+end
+
+local function pickMoveMode(cf, ctrl, ref)
+	local cands = moveCandidates(cf, ctrl)
+	local refUnit = ref.Unit
+	local best, bestIdx = nil, MOVE_MODE
+	for i = 1, #cands do
+		local cm = Vector3.new(cands[i].X, 0, cands[i].Z)
+		if cm.Magnitude > 0.01 then
+			local d = (cm.Unit - refUnit).Magnitude
+			if best == nil or d < best then
+				best, bestIdx = d, i
+			end
+		end
+	end
+	return bestIdx
+end
+
+-- UIS:IsKeyDown hata verirse uçuşu düşürmesin
+local function keyDown(code)
+	local ok, value = pcall(function()
+		return UIS:IsKeyDown(code)
+	end)
+	return ok and value == true
 end
 
 local function startFly()
@@ -354,7 +396,7 @@ local function startFly()
 		Attachment0 = attachment,
 		RigidityEnabled = false,
 		MaxTorque = 1e7,
-		MaxAngularVelocity = math.huge,
+		MaxAngularVelocity = 100,
 		Responsiveness = 40,
 		CFrame = Root.CFrame,
 	}, Root)
@@ -383,33 +425,24 @@ local function startFly()
 		local cf = camera.CFrame
 		local typing = UIS[S.GETFOCUSEDTEXTBOX](UIS) ~= nil
 
-		-- ham klavye vektörü (referans)
-		local raw = Vector3.zero
+		-- klavye girdisi (iç düzlem: X = sağ, Z = +ileri)
+		local kb = Vector3.zero
 		if not typing then
-			raw = Vector3.new(
-				(UIS:IsKeyDown(KeyCode.D) and 1 or 0) - (UIS:IsKeyDown(KeyCode.A) and 1 or 0),
+			kb = Vector3.new(
+				(keyDown(KeyCode.D) and 1 or 0) - (keyDown(KeyCode.A) and 1 or 0),
 				0,
-				(UIS:IsKeyDown(KeyCode.S) and 1 or 0) - (UIS:IsKeyDown(KeyCode.W) and 1 or 0)
+				(keyDown(KeyCode.W) and 1 or 0) - (keyDown(KeyCode.S) and 1 or 0)
 			)
 		end
 
-		-- hareket vektörü
-		local mv = raw
-		if Controls then
+		-- joystick / gamepad girdisi (eksen düzeni sürüme göre değişebiliyor)
+		local ctrl = nil
+		if Controls and not typing then
 			local ok, v = pcall(function()
 				return Controls[S.GETMOVEVECTOR](Controls)
 			end)
-			if ok and v then
-				mv = Vector3.new(v.X, 0, v.Y)
-				-- işaret kalibrasyonu (W/S yönü ters ise düzelt)
-				if moveSign == nil then
-					if raw.Z ~= 0 and mv.Z ~= 0 then
-						moveSign = (raw.Z > 0) == (mv.Z > 0) and 1 or -1
-					end
-				end
-				if moveSign then
-					mv = Vector3.new(mv.X, 0, mv.Z * moveSign)
-				end
+			if ok and type(v) == "Vector3" and v.Magnitude > 0.01 then
+				ctrl = Vector3.new(v.X, 0, v.Z)
 			end
 		end
 
@@ -429,22 +462,61 @@ local function startFly()
 			end
 		end
 
-		-- yatay bakış yönü (kamera eğiminden bağımsız)
+		-- yatay kamera eksenleri (kamera eğimi hesaba katılmaz)
 		local flat = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
 		if flat.Magnitude < 0.01 then
-			flat = Vector3.new(0, 0, -1)
+			flat = lastFlat or Vector3.new(0, 0, -1)
 		else
 			flat = flat.Unit
+			lastFlat = flat
+		end
+		local rightFlat = Vector3.new(cf.RightVector.X, 0, cf.RightVector.Z)
+		if rightFlat.Magnitude < 0.01 then
+			rightFlat = Vector3.new(-flat.Z, 0, flat.X)
+		else
+			rightFlat = rightFlat.Unit
 		end
 
-		local direction = flat * (-mv.Z) + cf.RightVector * mv.X + Vector3.yAxis * math.clamp(vertical, -1, 1)
+		-- yön hesabı: her şey DÜNYA-UZAYINA çevrilir.
+		-- klavye belirleyicidir; joystick/gamepad kalibre edilmiş yorumla kullanılır.
+		local dir = Vector3.zero
+
+		if kb.Magnitude > 0.01 then
+			-- W/S: kameranın TAM bakış yönü (yukarı/aşağı eğim dahil), A/D: yatay yan hareket
+			dir = cf.LookVector * kb.Z + rightFlat * kb.X
+			-- kontrol modülü de aktifse yorum modunu kalibre et (referans yatay kalmalı)
+			if ctrl then
+				MOVE_MODE = pickMoveMode(cf, ctrl, flat * kb.Z + rightFlat * kb.X)
+			end
+		elseif ctrl then
+			local cands = moveCandidates(cf, ctrl)
+			-- referans: Humanoid.MoveDirection (dünya-uzayı, tüm cihazlar)
+			local ref = Vector3.zero
+			if Humanoid then
+				local md = Humanoid.MoveDirection
+				if md and md.Magnitude > 0.01 then
+					ref = Vector3.new(md.X, 0, md.Z)
+				end
+			end
+			if ref.Magnitude > 0.01 then
+				MOVE_MODE = pickMoveMode(cf, ctrl, ref)
+			end
+			dir = cands[MOVE_MODE]
+		end
+
+		local direction = dir + Vector3.yAxis * math.clamp(vertical, -1, 1)
 		if direction.Magnitude > 1 then
 			direction = direction.Unit
 		end
 
 		velocity = velocity:Lerp(direction * CONFIG.Speed, math.min(1, dt * 12))
 		linear[S.VECTORVELOCITY] = velocity
-		align[S.CFRAME] = CFrame.lookAt(Vector3.zero, flat)
+
+		-- karakter kameraya baksın (yalnızca yön değiştiğinde güncelle)
+		if lastFacing ~= flat then
+			lastFacing = flat
+			align[S.CFRAME] = CFrame.lookAt(Vector3.zero, flat)
+		end
 	end)
 
 	return true
@@ -527,23 +599,28 @@ local function isPointer(input)
 end
 
 -- hover + basma animasyonu (metni kapatmayan temiz yöntem)
-local function fx(button, radius, hoverColor)
+-- fxBase: butonun "gerçek" rengi. Durum değişince güncellenir;
+-- böylece hover çıkışı eski rengi geri getirip seçimi bozmaz.
+local fxBase = {}
+
+local function fx(button, radius, hoverColor, manageStroke)
 	local baseColor = button.BackgroundColor3
-	local hasStroke = button:FindFirstChildOfClass(S.STROKE)
+	local hasStroke = manageStroke ~= false and button:FindFirstChildOfClass(S.STROKE)
 	local scale = new(S.SCALE, {}, button)
+	fxBase[button] = baseColor
 
 	button.MouseEnter:Connect(function()
 		if hoverColor then
 			tween(button, 0.18, {BackgroundColor3 = hoverColor})
 		end
 		if hasStroke then
-			tween(hasStroke, 0.18, {Transparency = 0.25})
+			tween(hasStroke, 0.18, {Transparency = math.max(0, hasStroke.Transparency - 0.15)})
 		end
 	end)
 	button.MouseLeave:Connect(function()
-		tween(button, 0.22, {BackgroundColor3 = baseColor})
+		tween(button, 0.22, {BackgroundColor3 = fxBase[button] or baseColor})
 		if hasStroke then
-			tween(hasStroke, 0.22, {Transparency = 0.7})
+			tween(hasStroke, 0.22, {Transparency = math.min(0.7, hasStroke.Transparency + 0.15)})
 		end
 		tween(scale, 0.12, {Scale = 1})
 	end)
@@ -558,7 +635,7 @@ local function fx(button, radius, hoverColor)
 end
 
 -- sürükleme takibi (global dinleyici yalnızca sürükleme sırasında açık)
-local function trackDrag(handle, onBegin, onMove)
+local function trackDrag(handle, onBegin, onMove, onEnd)
 	handle.InputBegan:Connect(function(input)
 		if not isPointer(input) then
 			return
@@ -573,6 +650,9 @@ local function trackDrag(handle, onBegin, onMove)
 			if endConn then
 				endConn:Disconnect()
 				endConn = nil
+			end
+			if onEnd then
+				onEnd()
 			end
 		end
 
@@ -1180,11 +1260,19 @@ local function register(obj, kind, slide)
 	if kind == "text" then
 		target = obj.TextTransparency
 		obj.TextTransparency = 1
+	elseif kind == "stroke" then
+		target = obj.Transparency
+		obj.Transparency = 1
 	else
 		target = obj.BackgroundTransparency
 		obj.BackgroundTransparency = 1
 	end
-	Entrance[#Entrance + 1] = {obj = obj, kind = kind, target = target, pos = obj.Position, slide = slide}
+	-- Konum yalnızca kaydırılacak GuiObject'lerde okunur (UIStroke vb. 'de Position' yok)
+	local pos = nil
+	if slide then
+		pos = obj.Position
+	end
+	Entrance[#Entrance + 1] = {obj = obj, kind = kind, target = target, pos = pos, slide = slide}
 end
 
 -- açık/kapalı anahtar satırı
@@ -1275,9 +1363,10 @@ local function createToggle(y, icon)
 	}, track)
 	corner(knob, 8)
 
-	fx(row, 13, COLORS.buttonHover)
+	fx(row, 13, COLORS.buttonHover, false)
 
 	register(row, "bg", true)
+	register(rowStroke, "stroke")
 	register(chip, "bg")
 	register(chipText, "text")
 	register(label, "text")
@@ -1423,12 +1512,8 @@ trackDrag(SliderHit, function(input)
 	tween(SliderKnob, 0.1, {Size = UDim2.fromOffset(22, 22)})
 end, function(changed)
 	sliderFromX(changed.Position.X)
-end)
-
-UIS.InputEnded:Connect(function(input)
-	if isPointer(input) then
-		tween(SliderKnob, 0.18, {Size = UDim2.fromOffset(18, 18)}, Ease.Back)
-	end
+end, function()
+	tween(SliderKnob, 0.18, {Size = UDim2.fromOffset(18, 18)}, Ease.Back)
 end)
 
 -- dil seçimi
@@ -1556,6 +1641,11 @@ DiscordButton.MouseEnter:Connect(function()
 	tween(Shine, 0.65, {Position = UDim2.new(1.5, 0, 0.5, 0), BackgroundTransparency = 0.95}, Ease.Sine)
 end)
 
+DiscordButton.MouseLeave:Connect(function()
+	Shine.Position = UDim2.new(-0.5, 0, 0.5, 0)
+	Shine.BackgroundTransparency = 0.86
+end)
+
 register(DiscordButton, "bg", true)
 register(DiscordIcon, "text")
 register(DiscordText, "text")
@@ -1603,7 +1693,7 @@ local ToastFrame = new(S.FRAME, {
 	BackgroundTransparency = 1,
 	BorderSizePixel = 0,
 	ZIndex = 20,
-}, Main)
+}, Gui)
 corner(ToastFrame, 12)
 
 local ToastText = new(S.LABEL, {
@@ -1672,11 +1762,13 @@ local function flashDiscord(text, color)
 	local id = flashId
 	DiscordText.Text = text
 	DiscordHint.Text = ""
+	fxBase[DiscordButton] = color or COLORS.green
 	tween(DiscordButton, 0.18, {BackgroundColor3 = color or COLORS.green})
 	task.delay(1.6, function()
 		if id == flashId then
 			DiscordText.Text = tr("discord")
 			DiscordHint.Text = tr("copy")
+			fxBase[DiscordButton] = COLORS.discord
 			tween(DiscordButton, 0.3, {BackgroundColor3 = COLORS.discord})
 		end
 	end)
@@ -1833,7 +1925,9 @@ local function setToggle(toggle, on)
 	toggle.State.Text = on and tr("on") or tr("off")
 	tween(toggle.State, 0.2, {TextColor3 = on and COLORS.green or COLORS.muted})
 	tween(toggle.Track, 0.2, {BackgroundColor3 = on and COLORS.green or COLORS.panel})
-	tween(toggle.Stroke, 0.2, {Color = on and COLORS.green or COLORS.panel, Transparency = on and 0.3 or 0.4})
+	-- NOT: çerçevenin saydamlığı giriş animasyonuna bırakılır (aksi halde
+	-- giriş sırasında satırın üstinde boş bir çerçeve asılı kalır)
+	tween(toggle.Stroke, 0.2, {Color = on and COLORS.green or COLORS.panel})
 	tween(toggle.Chip, 0.2, {BackgroundColor3 = on and COLORS.green or COLORS.accent})
 	tween(toggle.Knob, 0.28, {
 		Position = on and UDim2.new(0, 21, 0.5, 0) or UDim2.new(0, 3, 0.5, 0),
@@ -1860,6 +1954,7 @@ Refresh = function()
 
 	for code, button in pairs(LanguageButtons) do
 		local active = code == State.Language
+		fxBase[button] = active and COLORS.accent or COLORS.button
 		tween(button, 0.22, {
 			BackgroundColor3 = active and COLORS.accent or COLORS.button,
 			TextColor3 = active and COLORS.text or COLORS.muted,
@@ -1923,11 +2018,11 @@ Minimize.Activated:Connect(function()
 	if not mini then
 		Content.Visible = true
 	end
-	tween(Content, 0.22, {GroupTransparency = mini and 1 or 0})
+	tween(Content, 0.26, {GroupTransparency = mini and 1 or 0})
 	tween(Subtitle, 0.22, {TextTransparency = mini and 1 or 0})
 	tween(Main, 0.32, {Size = mini and MINI_SIZE or FULL_SIZE}, Ease.Quint)
 
-	task.delay(0.22, function()
+	task.delay(0.26, function()
 		if State.Minimized == mini then
 			Content.Visible = not mini
 		end
@@ -2057,7 +2152,9 @@ task.spawn(function()
 			end
 			if item.kind == "text" then
 				tween(obj, 0.4, {TextTransparency = item.target})
-			else
+		elseif item.kind == "stroke" then
+				tween(obj, 0.4, {Transparency = item.target})
+		else
 				tween(obj, 0.4, {BackgroundTransparency = item.target})
 			end
 			if item.slide then
