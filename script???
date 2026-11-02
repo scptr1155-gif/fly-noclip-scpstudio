@@ -1210,7 +1210,12 @@ local function register(obj, kind, slide)
 		target = obj.BackgroundTransparency
 		obj.BackgroundTransparency = 1
 	end
-	Entrance[#Entrance + 1] = {obj = obj, kind = kind, target = target, pos = obj.Position, slide = slide}
+	-- Konum yalnızca kaydırılacak GuiObject'lerde okunur (UIStroke vb. 'de Position' yok)
+	local pos = nil
+	if slide then
+		pos = obj.Position
+	end
+	Entrance[#Entrance + 1] = {obj = obj, kind = kind, target = target, pos = pos, slide = slide}
 end
 
 -- açık/kapalı anahtar satırı
