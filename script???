@@ -1,4 +1,750 @@
 --============================================================
+--  CR-SETA · SENARYO DOSYASI
+--  ------------------------------------------------------------
+--  Ana komut dosyasini sahte Roblox ortaminda calistirip
+--  uclus yonu + arayuz davranisini otomatik dogrular.
+--
+--  Calistirma:   luau senaryo.lua
+--
+--  Bu dosya "ana-komut-dosyasi.lua" iceriginden uretilmistir.
+--  Ana komut dosyasini degistirdiginde senaryoyu yeniden uret.
+--============================================================
+
+local Color3 = {}
+Color3.__index = Color3
+function Color3.new(r, g, b) return setmetatable({R=r, G=g, B=b}, Color3) end
+function Color3.fromRGB(r, g, b) return Color3.new(r/255, g/255, b/255) end
+function Color3.__tostring(c) return string.format("Color3(%d,%d,%d)", c.R*255, c.G*255, c.B*255) end
+
+local UDim2 = {}
+UDim2.__index = UDim2
+function UDim2.new(xs, xo, ys, yo) return setmetatable({X={Scale=xs,Offset=xo}, Y={Scale=ys,Offset=yo}}, UDim2) end
+function UDim2.fromScale(xs, ys) return UDim2.new(xs,0,ys,0) end
+function UDim2.fromOffset(xo, yo) return UDim2.new(0,xo,0,yo) end
+function UDim2.__eq(a,b) return a.X.Scale==b.X.Scale and a.X.Offset==b.X.Offset and a.Y.Scale==b.Y.Scale and a.Y.Offset==b.Y.Offset end
+function UDim2.__tostring(u) return string.format("UDim2(%.2f,%d,%.2f,%d)", u.X.Scale,u.X.Offset,u.Y.Scale,u.Y.Offset) end
+
+local UDim = {}
+UDim.__index = UDim
+function UDim.new(s, o) return setmetatable({Scale=s, Offset=o}, UDim) end
+
+local Vector3 = {}
+Vector3.__index = Vector3
+function Vector3.new(x,y,z) return setmetatable({X=x,Y=y,Z=z}, Vector3) end
+Vector3.zero = Vector3.new(0,0,0)
+Vector3.one = Vector3.new(1,1,1)
+Vector3.yAxis = Vector3.new(0,1,0)
+function Vector3.__add(a,b) return Vector3.new(a.X+b.X,a.Y+b.Y,a.Z+b.Z) end
+function Vector3.__sub(a,b) return Vector3.new(a.X-b.X,a.Y-b.Y,a.Z-b.Z) end
+function Vector3.__mul(a,b)
+	if type(a)=="number" then return Vector3.new(a*b.X,a*b.Y,a*b.Z) end
+	if type(b)=="number" then return Vector3.new(a.X*b,a.Y*b,a.Z*b) end
+	error("V3*V3 yok")
+end
+function Vector3.__eq(a,b) return a.X==b.X and a.Y==b.Y and a.Z==b.Z end
+function Vector3.__tostring(v) return string.format("(%.2f,%.2f,%.2f)", v.X,v.Y,v.Z) end
+function Vector3:Lerp(o, t) return Vector3.new(self.X+(o.X-self.X)*t, self.Y+(o.Y-self.Y)*t, self.Z+(o.Z-self.Z)*t) end
+function Vector3.__index(t,k)
+	local m = rawget(Vector3,k); if m ~= nil then return m end
+	if k=="Magnitude" then return math.sqrt(t.X*t.X+t.Y*t.Y+t.Z*t.Z) end
+	if k=="Unit" then
+		local m2 = math.sqrt(t.X*t.X+t.Y*t.Y+t.Z*t.Z)
+		if m2 < 1e-9 then return Vector3.zero end
+		return Vector3.new(t.X/m2,t.Y/m2,t.Z/m2)
+	end
+	return rawget(t,k)
+end
+
+local ColorSequenceKeypoint = {}
+ColorSequenceKeypoint.__index = ColorSequenceKeypoint
+function ColorSequenceKeypoint.new(time, color) return setmetatable({Time=time, Color=color}, ColorSequenceKeypoint) end
+
+local ColorSequence = {}
+ColorSequence.__index = ColorSequence
+function ColorSequence.new(keypoints) return setmetatable({Keypoints=keypoints or {}}, ColorSequence) end
+
+local Vector2 = {}
+Vector2.__index = Vector2
+function Vector2.new(x,y) return setmetatable({X=x,Y=y}, Vector2) end
+
+local CFrame = {}
+CFrame.__index = CFrame
+function CFrame.new(x,y,z) return setmetatable({LookVector=Vector3.new(0,0,-1), RightVector=Vector3.new(1,0,0)}, CFrame) end
+function CFrame.lookAt(eye, target)
+	local f = target - eye
+	local m = f.Magnitude
+	if m < 1e-9 then f = Vector3.new(0,0,-1) else f = Vector3.new(f.X/m,f.Y/m,f.Z/m) end
+	local up = Vector3.yAxis
+	local r = Vector3.new(f.Y*up.Z-f.Z*up.Y, f.Z*up.X-f.X*up.Z, f.X*up.Y-f.Y*up.X)
+	local rm = r.Magnitude
+	if rm < 1e-9 then r = Vector3.new(1,0,0) else r = Vector3.new(r.X/rm,r.Y/rm,r.Z/rm) end
+	return setmetatable({LookVector=f, RightVector=r}, CFrame)
+end
+function CFrame.Angles() return CFrame.new() end
+function CFrame:VectorToWorldSpace(v)
+    local l, r = self.LookVector, self.RightVector
+    local u = Vector3.new(r.Y*l.Z - r.Z*l.Y, r.Z*l.X - r.X*l.Z, r.X*l.Y - r.Y*l.X)
+    return Vector3.new(
+        r.X*v.X + u.X*v.Y - l.X*v.Z,
+        r.Y*v.X + u.Y*v.Y - l.Y*v.Z,
+        r.Z*v.X + u.Z*v.Y - l.Z*v.Z)
+end
+
+local Enum = setmetatable({}, {__index = function(t, k)
+	local grp = {}
+	rawset(t, k, grp)
+	setmetatable(grp, {__index = function(g, n)
+		local v = {__enum = k, __name = n}
+		rawset(g, n, v)
+		return v
+	end})
+	return grp
+end})
+
+
+-- Roblox davranisi: type(Vector3.new()) == "Vector3"
+local realType = type
+local type = function(v)
+    if getmetatable(v) == Vector3 then return "Vector3" end
+    return realType(v)
+end
+-- ================= zamanlayıcı (task) =================
+local clock, order = 0, 0
+local timers = {}
+local function schedule(at, co, fn, args)
+	order = order + 1
+	table.insert(timers, {at=at, co=co, fn=fn, args=args, order=order})
+end
+
+local task = {}
+function task.spawn(f, ...)
+	local co = coroutine.create(f)
+	schedule(clock, co, f, {n = select("#", ...), ...})
+	return co
+end
+function task.delay(t, f, ...)
+	local co = coroutine.create(f)
+	schedule(clock + (t or 0), co, f, {n = select("#", ...), ...})
+	return co
+end
+function task.defer(f, ...) return task.delay(0, f, ...) end
+function task.wait(t)
+	t = t or 0
+	local co = coroutine.running()
+	if co == nil then return end
+	schedule(clock + t, co, nil, nil)
+	coroutine.yield()
+	return t
+end
+
+local function runScheduler(maxTime, stopCo)
+	while #timers > 0 do
+		local best, bestIdx = nil, nil
+		for i, e in ipairs(timers) do
+			if best == nil or e.at < best.at or (e.at == best.at and e.order < best.order) then best, bestIdx = e, i end
+		end
+		if best.at > maxTime then break end
+		clock = best.at
+		table.remove(timers, bestIdx)
+		local ok, err
+		if best.fn then
+			ok, err = coroutine.resume(best.co, table.unpack(best.args, 1, best.args.n))
+		else
+			ok, err = coroutine.resume(best.co)
+		end
+		if not ok then print("!! ZAMANLAYICI HATASI:", tostring(err)) end
+		if stopCo and coroutine.status(stopCo) == "dead" then break end
+	end
+end
+
+local function warn(...) print("[warn]", ...) end
+
+
+-- ================= sıkı üye denetimi (Roblox "not a valid member" davranışı) =================
+local COMMON = {
+	Name=true, ClassName=true, Parent=true, Children=true,
+	Destroy=true, IsA=true, FindFirstChild=true, FindFirstChildOfClass=true,
+	GetChildren=true, GetDescendants=true, WaitForChild=true, Clone=true, ClearAllChildren=true,
+}
+local GUI = {
+	Visible=true, Position=true, Size=true, AnchorPoint=true, Rotation=true, ZIndex=true,
+	BackgroundColor3=true, BackgroundTransparency=true, BorderSizePixel=true, BorderMode=true,
+	ClipsDescendants=true, Active=true, LayoutOrder=true, AutomaticSize=true, Selectable=true,
+	Interactable=true, RichText=true, Text=true, TextSize=true, TextColor3=true, TextTransparency=true,
+	TextWrapped=true, TextXAlignment=true, TextYAlignment=true, Font=true, TextEditable=true,
+	ClearTextOnFocus=true, MultiLine=true, PlaceholderText=true, PlaceholderColor3=true,
+	TextTruncate=true, TextEditable=true, GroupTransparency=true, AbsolutePosition=true, AbsoluteSize=true,
+	NextSelectionDown=true, NextSelectionLeft=true, NextSelectionRight=true, NextSelectionUp=true,
+	AutomaticCanvasSize=true, SelectionGroup=true, ZIndexBehavior=true, DisplayOrder=true,
+	Modal=true, Selected=true, AutoLocalize=true, GroupColor=true, Pressed=true, ImageColor3=true,
+	AutoButtonColor=true, Style=true, Image=true, ImageTransparency=true, ImageRectOffset=true,
+	ImageRectSize=true, Icon=true, IconImage=true, IconSize=true, BackgroundImage=true,
+	BackgroundImageColor3=true, BackgroundImageTransparency=true, FontFace=true, LineHeight=true,
+	MaxVisibleGraphemes=true, OpenTypeFeaturesEnabled=true, TextDirection=true, TextEditable=true,
+	ResetOnSpawn=true, Enabled=true, IgnoreGuiInset=true,
+}
+local STRICT_MEMBERS = {
+	UIStroke = {Color=true, Thickness=true, Transparency=true, ApplyStrokeMode=true},
+	UICorner = {CornerRadius=true},
+	UIGradient = {Color=true, Rotation=true, Offset=true},
+	UIScale = {Scale=true},
+	UIListLayout = {FillDirection=true, SortOrder=true, Padding=true, HorizontalAlignment=true,
+		VerticalAlignment=true, AbsoluteContentSize=true},
+	Attachment = {Position=true, Orientation=true, Enabled=true},
+	LinearVelocity = {Attachment0=true, MaxForce=true, MaxTorque=true, VectorVelocity=true,
+		RelativeTo=true, VelocityConstraintMode=true, ForceLimitsEnabled=true},
+	AlignOrientation = {Attachment0=true, Attachment1=true, Mode=true, MaxTorque=true,
+		MaxAngularVelocity=true, Responsiveness=true, RigidityEnabled=true, CFrame=true},
+	Humanoid = {Health=true, PlatformStand=true, AutoRotate=true, WalkSpeed=true, JumpPower=true,
+		MoveDirection=true, SeatPart=true, DisplayDistanceType=true, ChangeState=true, Died=true},
+	BasePart = {CanCollide=true, Anchored=true, Position=true, CFrame=true, Size=true, Velocity=true,
+		Mass=true, AssemblyLinearVelocity=true, AssemblyAngularVelocity=true, CanTouch=true, CastShadow=true},
+	ScreenGui = {ResetOnSpawn=true, DisplayOrder=true, ZIndexBehavior=true, Enabled=true, IgnoreGuiInset=true},
+}
+-- GUI sınıfları geniş listeyi kullanır
+local GUI_CLASSES = {Frame=true, CanvasGroup=true, TextLabel=true, TextButton=true, TextBox=true,
+	ScreenGui=true, LayerCollector=true}
+
+local function memberAllowed(className, k)
+	local s = STRICT_MEMBERS[className]
+	if s then
+		if s[k] or COMMON[k] then return true end
+		return false
+	end
+	if GUI_CLASSES[className] then
+		if GUI[k] or COMMON[k] then return true end
+		return false
+	end
+	return true -- diğer sınıflar serbest
+end
+
+
+
+-- ---------------------------------------------------------
+--  Ucus yonu senaryolari (ana komut dosyasindaki gercek kod)
+-- ---------------------------------------------------------
+local function v3(x, y, z) return Vector3.new(x, y, z) end
+
+local keysDown = {}
+local KeyCode = {W="W", A="A", S="S", D="D", Space="Space", LeftControl="LC", RightControl="RC"}
+local UIS = {
+    GetFocusedTextBox = function(self) return nil end,
+    IsKeyDown = function(self, k) return keysDown[k] == true end,
+}
+local Controls = nil
+local camera = {CFrame = nil}
+local Hold = {}
+local S = {
+    GETFOCUSEDTEXTBOX = "GetFocusedTextBox",
+    GETMOVEVECTOR = "GetMoveVector",
+    VECTORVELOCITY = "VectorVelocity",
+    CFRAME = "CFrame",
+    PLATFORMSTAND = "PlatformStand",
+    AUTOROTATE = "AutoRotate",
+}
+local CONFIG = {Speed = 65}
+local Humanoid = {MoveDirection = Vector3.zero, PlatformStand = false, AutoRotate = true}
+local MOVE_MODE = 2
+local updateDebug = nil
+local dbg = {kb=Vector3.zero, ctrl=Vector3.zero, dir=Vector3.zero, vel=Vector3.zero, av=Vector3.zero}
+local lastFlat = nil
+local lastFacing = nil
+local velocity = Vector3.zero
+local linear = setmetatable({}, {__newindex = function() end})
+local align = setmetatable({}, {__newindex = function() end})
+
+-- ana komut dosyasindakiyle ayni yardimcilar
+local function moveCandidates(cf, ctrl)
+    return {
+        cf:VectorToWorldSpace(Vector3.new(ctrl.X, 0, ctrl.Z)),
+        cf:VectorToWorldSpace(Vector3.new(ctrl.X, 0, -ctrl.Z)),
+        Vector3.new(ctrl.X, 0, ctrl.Z),
+        cf:VectorToWorldSpace(Vector3.new(ctrl.Z, 0, -ctrl.X)),
+    }
+end
+local function pickMoveMode(cf, ctrl, ref)
+    local cands = moveCandidates(cf, ctrl)
+    local refUnit = ref.Unit
+    local best, bestIdx = nil, MOVE_MODE
+    for i = 1, #cands do
+        local cm = Vector3.new(cands[i].X, 0, cands[i].Z)
+        if cm.Magnitude > 0.01 then
+            local d = (cm.Unit - refUnit).Magnitude
+            if best == nil or d < best then best, bestIdx = d, i end
+        end
+    end
+    return bestIdx
+end
+local function keyDown(code) return keysDown[code] == true end
+
+-- ana komut dosyasindaki ucus yonu blogu (aynen)
+local function runFly(dt)
+        local cf = camera.CFrame
+        local typing = UIS[S.GETFOCUSEDTEXTBOX](UIS) ~= nil
+
+        -- klavye girdisi (iç düzlem: X = sağ, Z = +ileri)
+        local kb = Vector3.zero
+        if not typing then
+            kb = Vector3.new(
+                (keyDown(KeyCode.D) and 1 or 0) - (keyDown(KeyCode.A) and 1 or 0),
+                0,
+                (keyDown(KeyCode.W) and 1 or 0) - (keyDown(KeyCode.S) and 1 or 0)
+            )
+        end
+
+        -- joystick / gamepad girdisi (eksen düzeni sürüme göre değişebiliyor)
+        local ctrl = nil
+        if Controls and not typing then
+            local ok, v = pcall(function()
+                return Controls[S.GETMOVEVECTOR](Controls)
+            end)
+            if ok and type(v) == "Vector3" and v.Magnitude > 0.01 then
+                ctrl = Vector3.new(v.X, 0, v.Z)
+            end
+        end
+
+        local vertical = 0
+        if Hold.Up then
+            vertical = vertical + 1
+        end
+        if Hold.Down then
+            vertical = vertical - 1
+        end
+        if not typing then
+            if UIS:IsKeyDown(KeyCode.Space) then
+                vertical = vertical + 1
+            end
+            if UIS:IsKeyDown(KeyCode.LeftControl) or UIS:IsKeyDown(KeyCode.RightControl) then
+                vertical = vertical - 1
+            end
+        end
+
+        -- yatay kamera eksenleri (kamera eğimi hesaba katılmaz)
+        local flat = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
+        if flat.Magnitude < 0.01 then
+            flat = lastFlat or Vector3.new(0, 0, -1)
+        else
+            flat = flat.Unit
+            lastFlat = flat
+        end
+        local rightFlat = Vector3.new(cf.RightVector.X, 0, cf.RightVector.Z)
+        if rightFlat.Magnitude < 0.01 then
+            rightFlat = Vector3.new(-flat.Z, 0, flat.X)
+        else
+            rightFlat = rightFlat.Unit
+        end
+
+        -- yön hesabı: her şey DÜNYA-UZAYINA çevrilir.
+        -- klavye belirleyicidir; joystick/gamepad kalibre edilmiş yorumla kullanılır.
+        local dir = Vector3.zero
+
+        if kb.Magnitude > 0.01 then
+            dir = flat * kb.Z + rightFlat * kb.X
+            -- kontrol modülü de aktifse yorum modunu kalibre et
+            if ctrl then
+                MOVE_MODE = pickMoveMode(cf, ctrl, dir)
+            end
+        elseif ctrl then
+            local cands = moveCandidates(cf, ctrl)
+            -- referans: Humanoid.MoveDirection (dünya-uzayı, tüm cihazlar)
+            local ref = Vector3.zero
+            if Humanoid then
+                local md = Humanoid.MoveDirection
+                if md and md.Magnitude > 0.01 then
+                    ref = Vector3.new(md.X, 0, md.Z)
+                end
+            end
+            if ref.Magnitude > 0.01 then
+                MOVE_MODE = pickMoveMode(cf, ctrl, ref)
+            end
+            dir = cands[MOVE_MODE]
+        end
+
+        local direction = dir + Vector3.yAxis * math.clamp(vertical, -1, 1)
+        if direction.Magnitude > 1 then
+            direction = direction.Unit
+        end
+
+        velocity = velocity:Lerp(direction * CONFIG.Speed, math.min(1, dt * 12))
+        linear[S.VECTORVELOCITY] = velocity
+
+        -- Bazı oyunlarda kısıt çalışmıyor: hızı doğrudan da uygula
+        if Root and Root.Parent then
+            pcall(function()
+                Root.AssemblyLinearVelocity = velocity
+            end)
+        end
+
+        -- Oyunun kendi scriptleri PlatformStand/AutoRotate'i sıfırlarsa düzelt
+        if Humanoid[S.PLATFORMSTAND] ~= true then
+            Humanoid[S.PLATFORMSTAND] = true
+        end
+        if Humanoid[S.AUTOROTATE] ~= false then
+            Humanoid[S.AUTOROTATE] = false
+        end
+
+        -- teşhis verileri
+        dbg.kb = kb
+        dbg.ctrl = ctrl or Vector3.zero
+        dbg.dir = dir
+        dbg.vel = velocity
+        dbg.av = Root and Root.AssemblyLinearVelocity or Vector3.zero
+        if updateDebug then
+            updateDebug()
+        end
+
+        -- karakter kameraya baksın (yalnızca yön değiştiğinde güncelle)
+        if lastFacing ~= flat then
+            lastFacing = flat
+            align[S.CFRAME] = CFrame.lookAt(Vector3.zero, flat)
+        end
+
+    return direction, input
+end
+
+local function cam(look, right)
+    return setmetatable({LookVector = look, RightVector = right}, CFrame)
+end
+
+local flyResults = {}
+local function case(label, expect, cf, keys, mv)
+    keysDown = keys or {}
+    Controls = nil
+    if mv then
+        Controls = {[S.GETMOVEVECTOR] = function(self) return mv end}
+    end
+    camera.CFrame = cf
+    local ok, dir = pcall(runFly, 1/60)
+    flyResults[#flyResults + 1] = {
+        label = label,
+        expect = expect,
+        got = ok and dir or nil,
+        ok = ok and dir ~= nil and (dir - expect).Magnitude < 0.001,
+        err = ok and nil or dir,
+    }
+end
+
+
+-- kamera tanimlari
+local camDefault = cam(v3(0,0,-1), v3(1,0,0))      -- varsayilan kamera
+local camYaw90   = cam(v3(-1,0,0), v3(0,0,1))      -- 90 derece donuk
+local camYaw45   = cam(v3(-0.7071,0,-0.7071), v3(0.7071,0,-0.7071))
+local camUp      = cam(v3(0,1,0), v3(1,0,0))       -- tam yukari bakan
+
+-- 1) KLAVYE (belirleyici, konvansiyondan bagimsiz)
+case("Klavye W (kamera varsayilan)",        v3(0,0,-1), camDefault, {W=true})
+case("Klavye S (kamera varsayilan)",        v3(0,0,1),  camDefault, {S=true})
+case("Klavye D (kamera varsayilan)",        v3(1,0,0),  camDefault, {D=true})
+case("Klavye A (kamera varsayilan)",        v3(-1,0,0), camDefault, {A=true})
+case("Klavye W (kamera 90 donuk)",          v3(-1,0,0), camYaw90, {W=true})
+case("Klavye W (kamera 45 donuk)",          v3(-0.7071,0,-0.7071), camYaw45, {W=true})
+case("Klavye W+D (normalize)",              v3(0,0,-1), camYaw45, {W=true, D=true})
+case("Klavye W + Space (yukari)",           v3(0,0.7071,-0.7071), camDefault, {W=true, Space=true})
+case("Klavye W (Controls yuklenemedi)",     v3(0,0,-1), camDefault, {W=true}, nil)
+case("Klavye W (Controls yuklu, bos)",      v3(0,0,-1), camDefault, {W=true}, v3(0,0,0))
+case("Klavye S (Controls yuklu, bos)",      v3(0,0,1),  camDefault, {S=true}, v3(0,0,0))
+case("Klavye W (kamera 90, Controls yuklu)",v3(-1,0,0), camYaw90, {W=true}, v3(0,0,0))
+lastFlat = nil
+case("Kamera tam yukari (duzlem yok)",      v3(0,0,-1), camUp, {W=true})
+
+-- 2) JOYSTICK / GAMEPAD (istemci konvansiyonu ileri = +Z)
+case("Joystick ileri (+Z) kamera varsayilan", v3(0,0,-1), camDefault, {}, v3(0,0,1))
+case("Joystick geri  (+Z) kamera varsayilan", v3(0,0,1),  camDefault, {}, v3(0,0,-1))
+case("Joystick sag   (+Z) kamera varsayilan", v3(1,0,0),  camDefault, {}, v3(1,0,0))
+case("Joystick sol   (+Z) kamera varsayilan", v3(-1,0,0), camDefault, {}, v3(-1,0,0))
+case("Joystick ileri (+Z) kamera 90 donuk",   v3(-1,0,0), camYaw90, {}, v3(0,0,1))
+case("Joystick ileri (+Z) kamera 45 donuk",   v3(-0.7071,0,-0.7071), camYaw45, {}, v3(0,0,1))
+case("Joystick sag   (+Z) kamera 90 donuk",   v3(0,0,1),  camYaw90, {}, v3(1,0,0))
+case("Joystick ileri+sağ (+Z) kamera 90",    v3(-0.7071,0,0.7071), camYaw90, {}, v3(1,0,1))
+
+-- 3) REGRESYON: klavye, kontrol modulunun yonu ne olursa olsun kazanir
+case("KL. W + kontrol ileri(+Z) [regresyon]", v3(0,0,-1), camDefault, {W=true}, v3(0,0,1))
+case("KL. S + kontrol ileri(+Z) [regresyon]", v3(0,0,1),  camDefault, {S=true}, v3(0,0,1))
+case("KL. W + kontrol ileri(-Z) [eski istemci]", v3(0,0,-1), camDefault, {W=true}, v3(0,0,-1))
+case("KL. W + joystick sag (klavye belirleyici)", v3(0,0,-1), camDefault, {W=true}, v3(1,0,0))
+
+-- 4) KALIBRASYON: farkli istemci konvansiyonlari otomatik duzeltilir
+MOVE_MODE = 2
+Humanoid.MoveDirection = v3(0,0,-1)
+case("Joystick ileri(-Z) + MoveDirection referansi", v3(0,0,-1), camDefault, {}, v3(0,0,-1))
+Humanoid.MoveDirection = v3(-1,0,0)
+case("Joystick ileri(-Z) + MoveDirection 90 referansi", v3(-1,0,0), camYaw90, {}, v3(0,0,-1))
+Humanoid.MoveDirection = v3(0,0,0)
+
+
+print("============================================================")
+print("  BOLUM 1 · UCUS YONU SENARYOLARI")
+print("============================================================")
+local flyPass, flyFail = 0, 0
+for _, r in ipairs(flyResults) do
+    if r.ok then
+        flyPass = flyPass + 1
+        print(string.format("  [GECTI] %-44s %s", r.label, tostring(r.got)))
+    else
+        flyFail = flyFail + 1
+        print(string.format("  [KALDI] %-44s beklenen=%s gelen=%s %s",
+            r.label, tostring(r.expect), tostring(r.got), r.err and tostring(r.err) or ""))
+    end
+end
+print(string.format("  -> %d/%d gecti", flyPass, #flyResults))
+
+--============================================================
+--  BOLUM 2 · ARAYUZ DUMAN TESTI
+--============================================================
+-- ================= Instance =================
+local EVENT_NAMES = {
+	Died=true, DescendantAdded=true, CharacterAdded=true, CharacterRemoving=true,
+	InputBegan=true, InputEnded=true, InputChanged=true, MouseEnter=true, MouseLeave=true,
+	MouseButton1Down=true, MouseButton1Up=true, Activated=true, FocusLost=true, Focused=true,
+	Heartbeat=true, Stepped=true, RenderStepped=true, ChildAdded=true, AncestryChanged=true,
+}
+
+local function makeEvent()
+	local ev = {Connections = {}}
+	function ev:Connect(fn) table.insert(self.Connections, fn) return {Disconnect = function() end} end
+	function ev:Fire(...) for _, fn in ipairs(self.Connections) do fn(...) end end
+	return ev
+end
+
+local METHODS = {}
+function METHODS.FindFirstChild(self, name)
+	for _, c in ipairs(self._children) do if c.Name == name then return c end end
+	return nil
+end
+function METHODS.FindFirstChildOfClass(self, class)
+	for _, c in ipairs(self._children) do if c.ClassName == class then return c end end
+	return nil
+end
+function METHODS.GetChildren(self) return self._children end
+function METHODS.GetDescendants(self)
+	local out = {}
+	local function walk(n)
+		for _, c in ipairs(n._children) do out[#out+1] = c; walk(c) end
+	end
+	walk(self)
+	return out
+end
+function METHODS.WaitForChild(self, name)
+	local c = self:FindFirstChild(name)
+	if c then return c end
+	local names = {}
+	for _, ch in ipairs(self._children) do names[#names+1] = ch.Name end
+	error("WaitForChild timeout: " .. tostring(name) .. " (children: " .. table.concat(names, ",") .. ")")
+end
+function METHODS.IsA(self, class)
+	local map = {BasePart=true, Humanoid=true, Instance=true, Frame=true, TextLabel=true, TextButton=true,
+		TextBox=true, ScreenGui=true, CanvasGroup=true, GuiObject=true}
+	if map[class] then return self.ClassName == class or (class=="Instance") or (class=="GuiObject" and (self.ClassName=="Frame" or self.ClassName=="TextLabel" or self.ClassName=="TextButton" or self.ClassName=="TextBox" or self.ClassName=="CanvasGroup")) end
+	return false
+end
+function METHODS.Destroy(self) self.Parent = nil end
+function METHODS.ChangeState(self, state) self._state = state end
+function METHODS.ClearAllChildren(self) self._children = {} end
+function METHODS.Clone(self) return self end
+
+local DEFAULTS = {
+	ScreenGui = {ResetOnSpawn=false, DisplayOrder=0, ZIndexBehavior=1, Enabled=true},
+	Frame = {BackgroundColor3=Color3.new(0,0,0), BackgroundTransparency=0, BorderSizePixel=0,
+		Size=UDim2.new(0.5,0,0.5,0), Position=UDim2.new(0,0,0,0), AnchorPoint=Vector2.new(0,0),
+		Visible=true, ZIndex=1, ClipsDescendants=false, Active=false, Rotation=0},
+	CanvasGroup = {BackgroundColor3=Color3.new(0,0,0), BackgroundTransparency=0, BorderSizePixel=0,
+		Size=UDim2.new(0.5,0,0.5,0), Position=UDim2.new(0,0,0,0), AnchorPoint=Vector2.new(0,0),
+		Visible=true, ZIndex=1, ClipsDescendants=false, GroupTransparency=0, Active=false},
+	TextLabel = {BackgroundColor3=Color3.new(0,0,0), BackgroundTransparency=0, BorderSizePixel=0,
+		Size=UDim2.new(0.5,0,0.5,0), Position=UDim2.new(0,0,0,0), AnchorPoint=Vector2.new(0,0),
+		Visible=true, ZIndex=1, Text="", TextSize=14, TextColor3=Color3.new(1,1,1), TextTransparency=0,
+		TextWrapped=false, TextXAlignment=0, TextYAlignment=1, RichText=false},
+	TextButton = {BackgroundColor3=Color3.new(0,0,0), BackgroundTransparency=0, BorderSizePixel=0,
+		Size=UDim2.new(0.5,0,0.5,0), Position=UDim2.new(0,0,0,0), AnchorPoint=Vector2.new(0,0),
+		Visible=true, ZIndex=1, Text="", TextSize=14, TextColor3=Color3.new(1,1,1), TextTransparency=0,
+		TextWrapped=false, TextXAlignment=1, TextYAlignment=1, AutoButtonColor=true, ClipsDescendants=false, Active=false},
+	TextBox = {BackgroundColor3=Color3.new(0,0,0), BackgroundTransparency=0, BorderSizePixel=0,
+		Size=UDim2.new(0.5,0,0.5,0), Position=UDim2.new(0,0,0,0), AnchorPoint=Vector2.new(0,0),
+		Visible=true, ZIndex=1, Text="", PlaceholderText="", TextSize=14, TextColor3=Color3.new(1,1,1),
+		TextTransparency=0, TextEditable=true, Selectable=true, ClearTextOnFocus=true, MultiLine=false, Active=false},
+	UICorner = {CornerRadius=UDim.new(0,0)},
+	UIStroke = {Color=Color3.new(1,1,1), Thickness=1, Transparency=0, ApplyStrokeMode=0},
+	UIGradient = {Rotation=0, Offset=Vector2.new(0,0)},
+	UIScale = {Scale=1},
+	UIListLayout = {FillDirection=1, SortOrder=1, Padding=UDim.new(0,0), AbsoluteContentSize=Vector2.new(0,0)},
+	Attachment = {Position=Vector3.new(0,0,0), Orientation=Vector3.new(0,0,0), Enabled=true},
+	LinearVelocity = {MaxForce=0, VectorVelocity=Vector3.zero, RelativeTo=0, VelocityConstraintMode=0},
+	AlignOrientation = {MaxTorque=1e6, MaxAngularVelocity=math.pi, Responsiveness=20, RigidityEnabled=false, CFrame=CFrame.new()},
+	Humanoid = {Health=100, PlatformStand=false, AutoRotate=true, WalkSpeed=16, JumpPower=50, MoveDirection=Vector3.zero},
+	BasePart = {CanCollide=true, Anchored=false, Position=Vector3.new(0,0,0), CFrame=CFrame.new(),
+		Size=Vector3.new(2,2,1), Velocity=Vector3.zero, Mass=1},
+	Model = {},
+}
+
+local Instance = {}
+
+local function newInstance(className)
+	local inst = {ClassName=className, Name=className, _children={}, _props={}, _events={}, _parent=nil}
+	for k, v in pairs(DEFAULTS[className] or {}) do inst._props[k] = v end
+	setmetatable(inst, {
+		__index = function(t, k)
+			if k == "Parent" then return rawget(t, "_parent") end
+			local p = rawget(t, "_props")[k]
+			if p ~= nil then return p end
+			local own = rawget(t, k)
+			if own ~= nil then return own end
+			if EVENT_NAMES[k] then
+				local ev = rawget(t, "_events")[k]
+				if not ev then ev = makeEvent(); rawget(t, "_events")[k] = ev end
+				return ev
+			end
+			if METHODS[k] == nil and not memberAllowed(className, k) then
+				error(string.format("%s is not a valid member of %s.", tostring(k), className), 2)
+			end
+			return METHODS[k]
+		end,
+		__newindex = function(t, k, v)
+			if k == "Parent" then
+				local old = rawget(t, "_parent")
+				if old then
+					for i, c in ipairs(old._children) do if c == t then table.remove(old._children, i) break end end
+				end
+				rawset(t, "_parent", v)
+				if v then table.insert(v._children, t) end
+				return
+			end
+			if not memberAllowed(className, k) then
+				error(string.format("%s is not a valid member of %s.", tostring(k), className), 2)
+			end
+			rawget(t, "_props")[k] = v
+		end,
+	})
+	return inst
+end
+
+function Instance.new(className, parent)
+	if className == "BindableEvent" then
+		local ev = {Connections = {}, _fired = false}
+		function ev:Connect(fn) table.insert(self.Connections, fn) return {Disconnect = function() end} end
+		function ev:Wait() while not self._fired do task.wait(0.01) end return self._value end
+		function ev:Fire(a) self._fired = true; self._value = a end
+		local inst = newInstance("BindableEvent")
+		inst._props.Event = ev
+		inst._props.Fire = function(_, a) ev:Fire(a) end
+		if parent then inst.Parent = parent end
+		return inst
+	end
+	local i = newInstance(className)
+	if parent then i.Parent = parent end
+	return i
+end
+
+-- ================= servisler =================
+local TweenInfo = {}
+TweenInfo.__index = TweenInfo
+function TweenInfo.new(t, s, d, r, rev, delay)
+	return setmetatable({Time=t, EaseStyle=s, EaseDirection=d, RepeatCount=r or 0, Reverses=rev or false, DelayTime=delay or 0}, TweenInfo)
+end
+
+local TweenService = {}
+function TweenService:Create(obj, info, props)
+	local t = {}
+	function t:Play()
+		if obj and props then for k, v in pairs(props) do obj[k] = v end end
+		return self
+	end
+	function t:Cancel() return self end
+	function t:Pause() return self end
+	return t
+end
+
+local UIS = {}
+UIS.__index = UIS
+function UIS:IsKeyDown(k) return false end
+function UIS:GetFocusedTextBox() return nil end
+UIS.InputBegan = makeEvent()
+UIS.InputEnded = makeEvent()
+UIS.InputChanged = makeEvent()
+UIS.TouchEnabled = false
+UIS.KeyboardEnabled = true
+
+local RunService = {}
+RunService.Heartbeat = makeEvent()
+RunService.Stepped = makeEvent()
+RunService.RenderStepped = makeEvent()
+
+local workspace = {}
+workspace.CurrentCamera = {CFrame = CFrame.lookAt(Vector3.new(0,10,0), Vector3.new(0,10,-10))}
+workspace.GetServerTimeNow = function() return os.time() end
+
+local PlayerGui = newInstance("ScreenGui")
+PlayerGui.Name = "PlayerGui"
+
+local Humanoid = newInstance("Humanoid")
+local RootPart = newInstance("BasePart")
+RootPart.Name = "HumanoidRootPart"
+local Character = newInstance("Model")
+Character.Name = "Character"
+Humanoid.Parent = Character
+RootPart.Parent = Character
+
+local Controls = {}
+function Controls:GetMoveVector() return Vector3.zero end
+
+local PM = newInstance("Folder")
+PM.Name = "PlayerModule"
+function PM:GetControls() return Controls end
+
+local PlayerScripts = newInstance("Folder")
+PlayerScripts.Name = "PlayerScripts"
+PM.Parent = PlayerScripts
+
+local LocalPlayer = newInstance("Folder")
+LocalPlayer.Name = "LocalPlayer"
+LocalPlayer.PlayerGui = PlayerGui
+LocalPlayer.PlayerScripts = PlayerScripts
+LocalPlayer.Character = Character
+LocalPlayer.CharacterAdded = makeEvent()
+LocalPlayer.CharacterRemoving = makeEvent()
+PlayerGui.Parent = LocalPlayer
+PlayerScripts.Parent = LocalPlayer
+
+local Players = {}
+Players.LocalPlayer = LocalPlayer
+
+local game = {}
+function game:GetService(name)
+	if name == "Players" then return Players end
+	if name == "UserInputService" then return UIS end
+	if name == "RunService" then return RunService end
+	if name == "TweenService" then return TweenService end
+	return {}
+end
+game.HttpGet = function(_, url) return "TESTKEY-1234\n" end
+
+local function require(m)
+	if m == PM then return PM end
+	error("mock require: desteklenmiyor")
+end
+
+local function findDesc(root, className, pred)
+	local out = {}
+	local function walk(n)
+		for _, c in ipairs(n._children) do
+			if (not className or c.ClassName == className) and (not pred or pred(c)) then out[#out+1] = c end
+			walk(c)
+		end
+	end
+	walk(root)
+	return out
+end
+
+
+-- ================= TEST =================
+local guiPass, guiFail = 0, 0
+local function check(label, cond, extra)
+	if cond then guiPass = guiPass + 1; print(string.format("  OK   %s %s", label, extra or ""))
+	else guiFail = guiFail + 1; print(string.format("  FAIL %s %s", label, extra or "")) end
+end
+
+local testCo = coroutine.create(function()
+	task.spawn(function()
+--============================================================
 --  CR-SETA  ·  MULTI TOOL
 --  ------------------------------------------------------------
 --  LocalScript  ->  StarterPlayer > StarterPlayerScripts
@@ -288,6 +1034,15 @@ local lastFacing = nil -- karakterin baktığı yön (gereksiz güncellemeyi ön
 -- GetMoveVector() yorum modu (çalışma anında kalibre edilir):
 -- 1 = kamera-yerel ileri=-Z | 2 = kamera-yerel ileri=+Z | 3 = dünya-uzayı | 4 = eski düzen (X=ileri)
 local MOVE_MODE = 2
+-- canlı teşhis (F9) için paylaşılan durum
+local dbg = {
+	kb = Vector3.zero,
+	ctrl = Vector3.zero,
+	dir = Vector3.zero,
+	vel = Vector3.zero,
+	av = Vector3.zero,
+}
+local updateDebug = nil
 
 task.spawn(function()
 	local ok, module = pcall(function()
@@ -482,11 +1237,10 @@ local function startFly()
 		local dir = Vector3.zero
 
 		if kb.Magnitude > 0.01 then
-			-- W/S: kameranın TAM bakış yönü (yukarı/aşağı eğim dahil), A/D: yatay yan hareket
-			dir = cf.LookVector * kb.Z + rightFlat * kb.X
-			-- kontrol modülü de aktifse yorum modunu kalibre et (referans yatay kalmalı)
+			dir = flat * kb.Z + rightFlat * kb.X
+			-- kontrol modülü de aktifse yorum modunu kalibre et
 			if ctrl then
-				MOVE_MODE = pickMoveMode(cf, ctrl, flat * kb.Z + rightFlat * kb.X)
+				MOVE_MODE = pickMoveMode(cf, ctrl, dir)
 			end
 		elseif ctrl then
 			local cands = moveCandidates(cf, ctrl)
@@ -511,6 +1265,31 @@ local function startFly()
 
 		velocity = velocity:Lerp(direction * CONFIG.Speed, math.min(1, dt * 12))
 		linear[S.VECTORVELOCITY] = velocity
+
+		-- Bazı oyunlarda kısıt çalışmıyor: hızı doğrudan da uygula
+		if Root and Root.Parent then
+			pcall(function()
+				Root.AssemblyLinearVelocity = velocity
+			end)
+		end
+
+		-- Oyunun kendi scriptleri PlatformStand/AutoRotate'i sıfırlarsa düzelt
+		if Humanoid[S.PLATFORMSTAND] ~= true then
+			Humanoid[S.PLATFORMSTAND] = true
+		end
+		if Humanoid[S.AUTOROTATE] ~= false then
+			Humanoid[S.AUTOROTATE] = false
+		end
+
+		-- teşhis verileri
+		dbg.kb = kb
+		dbg.ctrl = ctrl or Vector3.zero
+		dbg.dir = dir
+		dbg.vel = velocity
+		dbg.av = Root and Root.AssemblyLinearVelocity or Vector3.zero
+		if updateDebug then
+			updateDebug()
+		end
 
 		-- karakter kameraya baksın (yalnızca yön değiştiğinde güncelle)
 		if lastFacing ~= flat then
@@ -1747,6 +2526,84 @@ local LauncherGradient = new(S.GRADIENT, {
 }, Launcher)
 local LauncherScale = new(S.SCALE, {}, Launcher)
 fx(Launcher, 15)
+
+--------------------------------------------------------------------
+-- 5b) Canlı teşhis katmanı (F9)
+--------------------------------------------------------------------
+local DebugOverlay, DebugLabel
+local debugOn = false
+
+local function buildDebug()
+	if DebugOverlay then
+		return
+	end
+	DebugOverlay = new(S.FRAME, {
+		Position = UDim2.fromOffset(12, 12),
+		Size = UDim2.fromOffset(330, 210),
+		BackgroundColor3 = Color3.fromRGB(8, 12, 20),
+		BackgroundTransparency = 0.1,
+		BorderSizePixel = 0,
+		Visible = false,
+		ZIndex = 60,
+	}, Gui)
+	corner(DebugOverlay, 10)
+	stroke(DebugOverlay, COLORS.accent, 1.5, 0.25)
+	DebugLabel = new(S.LABEL, {
+		Position = UDim2.fromOffset(10, 8),
+		Size = UDim2.new(1, -20, 1, -16),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.Code,
+		TextSize = 12,
+		TextColor3 = COLORS.text,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		TextWrapped = true,
+		ZIndex = 61,
+	}, DebugOverlay)
+end
+
+local function fmt(v)
+	if not v then
+		return "-"
+	end
+	return string.format("(%.2f, %.2f, %.2f)", v.X, v.Y, v.Z)
+end
+
+updateDebug = function()
+	if not debugOn or not DebugLabel then
+		return
+	end
+	local lines = {
+		"CR-SETA FLY DEBUG  (F9: kapat)",
+		"Controls yuklu : " .. (Controls and "EVET" or "YOK"),
+		"MOVE_MODE      : " .. tostring(MOVE_MODE),
+		"klavye         : " .. fmt(dbg.kb),
+		"kontrol vektor : " .. fmt(dbg.ctrl),
+		"yon            : " .. fmt(dbg.dir),
+		"hedef hiz      : " .. fmt(dbg.vel),
+		"assembly hiz   : " .. fmt(dbg.av),
+		"Root           : " .. (Root and Root.Name or "YOK"),
+		"Humanoid HP    : " .. (Humanoid and tostring(Humanoid.Health) or "YOK"),
+		"PlatformStand  : " .. (Humanoid and tostring(Humanoid[S.PLATFORMSTAND]) or "-"),
+		"AutoRotate     : " .. (Humanoid and tostring(Humanoid[S.AUTOROTATE]) or "-"),
+	}
+	DebugLabel.Text = table.concat(lines, "\n")
+end
+
+UIS.InputBegan:Connect(function(input)
+	if input and input.KeyCode == KeyCode.F9 then
+		debugOn = not debugOn
+		if debugOn then
+			buildDebug()
+		end
+		if DebugOverlay then
+			DebugOverlay.Visible = debugOn
+		end
+		if debugOn then
+			updateDebug()
+		end
+	end
+end)
 TweenService:Create(LauncherGradient, TweenInfo.new(9, Ease.Linear, EaseDir.In, -1), {Rotation = 405}):Play()
 
 --------------------------------------------------------------------
@@ -2234,4 +3091,160 @@ if not __ok then
 	local stroke = Instance.new("UIStroke", box)
 	stroke.Color = Color3.fromRGB(235, 80, 90)
 	stroke.Thickness = 1.5
+end
+	end)
+
+	task.wait(0.4)
+	task.spawn(function()
+		local gates = findDesc(PlayerGui, "ScreenGui", function(g) return g.Name == "crseta_key" end)
+		if #gates == 0 then return end
+		local gate = gates[1]
+		local boxes = findDesc(gate, "TextBox")
+		local buttons = findDesc(gate, "TextButton", function(b) return b.Text ~= "" end)
+		if boxes[1] then boxes[1].Text = "TESTKEY-1234" end
+		if buttons[1] then buttons[1].Activated:Fire() end
+	end)
+
+	-- giriş animasyonu sürerken anlık görüntü:
+	-- satır henüz görünür değilken çerçeve de gizli olmalı (kayan çerçeve olmamalı)
+	local captured = false
+	for _ = 1, 400 do
+		local rs = findDesc(PlayerGui, "TextButton", function(b) return b.Size.Y.Offset == 54 end)
+		if #rs == 2 and rs[1].BackgroundTransparency >= 0.99 then
+			local st = findDesc(rs[1], "UIStroke")
+			check("giriş animasyonunda çerçeve gizli (kayan çerçeve yok)",
+				#st == 1 and st[1].Transparency >= 0.99,
+				#st == 1 and tostring(st[1].Transparency) or "yok")
+			captured = true
+			break
+		end
+		task.wait(0.02)
+	end
+	if not captured then
+		check("giriş animasyonunda çerçeve gizli (kayan çerçeve yok)", false, "örnek yakalanamadı")
+	end
+
+	task.wait(3)
+
+	print("\n=== SONUÇLAR ===")
+	local errs = findDesc(PlayerGui, "ScreenGui", function(g) return g.Name == "crseta_error" end)
+	check("script hata vermedi", #errs == 0, #errs > 0 and tostring(errs[1]._children[1].Text or "") or "")
+
+	local guis = findDesc(PlayerGui, "ScreenGui", function(g) return g.Name == "CrSetaGui" end)
+	check("CrSetaGui oluştu", #guis == 1)
+	if #guis ~= 1 then return end
+	local Gui = guis[1]
+
+	local mains = findDesc(Gui, "Frame", function(f) return f.Name == "Main" end)
+	check("Main frame var", #mains == 1)
+	local Main = mains[1]
+
+	local toasts = findDesc(Gui, "Frame", function(f)
+		return f.BackgroundColor3 and f.BackgroundColor3.R > 0.1 and f.BackgroundColor3.R < 0.2 and f.Size.Y.Offset == 38
+	end)
+	check("toast frame bulundu", #toasts >= 1, #toasts)
+	if #toasts >= 1 then
+		local tt = toasts[1]
+		check("toast Main altında değil (kırpılmıyor)", tt.Parent == Gui, "parent=" .. tostring(tt.Parent and tt.Parent.Name))
+		check("toast ekran üstünde", tt.Position.Y.Offset < 0, tostring(tt.Position))
+	end
+
+	local rows = findDesc(Gui, "TextButton", function(b) return b.Size.Y.Offset == 54 end)
+	check("toggle satırları bulundu (2)", #rows == 2, #rows)
+	if #rows == 2 then
+		local r = rows[1]
+		check("toggle satırı görünür", r.BackgroundTransparency == 0, tostring(r.BackgroundTransparency))
+		check("toggle satırı yerine oturmuş", r.Position.Y.Offset == 14, tostring(r.Position))
+		local chips = findDesc(r, "Frame", function(f) return f.Size.X.Offset == 36 and f.Size.Y.Offset == 36 end)
+		check("chip görünür", #chips == 1 and chips[1].BackgroundTransparency == 0, chips[1] and tostring(chips[1].BackgroundTransparency) or "yok")
+		local strokes = findDesc(r, "UIStroke")
+		check("toggle çerçevesi görünür", #strokes == 1 and strokes[1].Transparency < 1, strokes[1] and tostring(strokes[1].Transparency) or "yok")
+	end
+
+	local langButtons = findDesc(Gui, "TextButton", function(b) return b.Text == "EN" end)
+	check("EN dil butonu bulundu", #langButtons == 1, #langButtons)
+	if #langButtons == 1 then
+		local enBtn = langButtons[1]
+		enBtn.Activated:Fire()
+		task.wait(0.3)
+		local titles = findDesc(Gui, "TextLabel", function(l) return l.Text == "CR-SETA" and l.TextSize == 20 end)
+		check("dil değişimi çalıştı", #titles >= 1)
+		-- hover-out sonrası vurgu kalmalı (fxBase düzeltmesi)
+		enBtn.MouseLeave:Fire()
+		task.wait(0.3)
+		check("aktif dil vurgusu hover-out sonrası kaldı", enBtn.BackgroundColor3.G > 0.5 and enBtn.BackgroundColor3.B > 0.9, tostring(enBtn.BackgroundColor3))
+	end
+
+	local flyRow = rows[1]
+	flyRow.Activated:Fire()
+	task.wait(0.2)
+	check("uçuş açıldı (LinearVelocity)", #findDesc(RootPart, "LinearVelocity") == 1)
+	check("AlignOrientation oluştu", #findDesc(RootPart, "AlignOrientation") == 1)
+	check("PlatformStand açık", Humanoid.PlatformStand == true)
+
+	UIS.IsKeyDown = function(_, k) return k == Enum.KeyCode.W end
+	RunService.Heartbeat:Fire(1/60)
+	task.wait(0.1)
+	local lv = findDesc(RootPart, "LinearVelocity")[1]
+	check("W ile ileri hareket (Z negatif)", lv and lv.VectorVelocity.Z < 0, lv and tostring(lv.VectorVelocity) or "yok")
+
+	flyRow.Activated:Fire()
+	task.wait(0.2)
+	check("uçuş kapandı (kısıtlar temizlendi)", #findDesc(RootPart, "LinearVelocity") == 0)
+	check("PlatformStand kapandı", Humanoid.PlatformStand == false)
+
+	-- teşhis katmanı (F9)
+	UIS.InputBegan:Fire({KeyCode = Enum.KeyCode.F9})
+	task.wait(0.2)
+	local debugFrames = findDesc(PlayerGui, "ScreenGui", function(g) return g.Name == "CrSetaGui" end)
+	local overlay = nil
+	if #debugFrames == 1 then
+		local frames = findDesc(debugFrames[1], "Frame")
+		for _, f in ipairs(frames) do
+			if f.Size.X.Offset == 330 and f.Size.Y.Offset == 210 then overlay = f end
+		end
+	end
+	check("F9 teşhis katmanı açıldı", overlay ~= nil and overlay.Visible == true)
+	if overlay then
+		local labels = findDesc(overlay, "TextLabel")
+		local txt = labels[1] and labels[1].Text or ""
+		check("teşhis metni dolu", #txt > 40, string.sub(txt, 1, 60) .. "...")
+		check("teşhis metninde hareket yönü var", txt:find("yon") ~= nil)
+	end
+	UIS.InputBegan:Fire({KeyCode = Enum.KeyCode.F9})
+	task.wait(0.2)
+	if overlay then
+		check("F9 teşhis katmanı kapandı", overlay.Visible == false)
+	end
+
+	-- doğrudan hız uygulaması
+	local flyRow2 = findDesc(PlayerGui, "TextButton", function(b) return b.Size.Y.Offset == 54 end)[1]
+	if flyRow2 then
+		flyRow2.Activated:Fire()
+		task.wait(0.2)
+		UIS.IsKeyDown = function(_, k) return k == Enum.KeyCode.W end
+		RunService.Heartbeat:Fire(1/60)
+		task.wait(0.1)
+		check("doğrudan hız uygulandı (AssemblyLinearVelocity)", RootPart.AssemblyLinearVelocity.Z < 0,
+			tostring(RootPart.AssemblyLinearVelocity))
+		flyRow2.Activated:Fire()
+	end
+
+	print(string.format("  -> %d gecti, %d kaldi", guiPass, guiFail))
+end)
+
+schedule(0, testCo, nil, nil)
+runScheduler(20, testCo)
+
+
+--============================================================
+--  GENEL SONUC
+--============================================================
+print("")
+print(string.format("  UCUS YONU : %d/%d", flyPass, flyFail + flyPass))
+print(string.format("  ARAYUZ    : %d gecti, %d kaldi", guiPass, guiFail))
+if flyFail == 0 and guiFail == 0 then
+    print("  TUM SENARYOLAR GECTI ✔")
+else
+    print("  KALAN SENARYOLAR VAR ✘")
 end
