@@ -285,6 +285,9 @@ local Refresh
 local AutoRotateBackup = true
 local lastFlat = nil   -- kamera tam yukarı/aşağı bakarken son geçerli yatay yön
 local lastFacing = nil -- karakterin baktığı yön (gereksiz güncellemeyi önler)
+-- GetMoveVector() yorum modu (çalışma anında kalibre edilir):
+-- 1 = kamera-yerel ileri=-Z | 2 = kamera-yerel ileri=+Z | 3 = dünya-uzayı | 4 = eski düzen (X=ileri)
+local MOVE_MODE = 2
 
 task.spawn(function()
 	local ok, module = pcall(function()
@@ -338,6 +341,42 @@ local function stopFly()
 	end
 end
 
+-- Roblox'un GetMoveVector() eksen düzeni sürümden sürüme değişebiliyor.
+-- Bu yüzden birkaç yorum adayı üretilir; dünya-uzayındaki gerçek referansla
+-- (klavye veya Humanoid.MoveDirection) en tutarlı olan seçilir.
+local function moveCandidates(cf, ctrl)
+	return {
+		cf:VectorToWorldSpace(Vector3.new(ctrl.X, 0, ctrl.Z)),   -- 1: kamera-yerel, ileri = -Z
+		cf:VectorToWorldSpace(Vector3.new(ctrl.X, 0, -ctrl.Z)),  -- 2: kamera-yerel, ileri = +Z
+		Vector3.new(ctrl.X, 0, ctrl.Z),                          -- 3: dünya-uzayı
+		cf:VectorToWorldSpace(Vector3.new(ctrl.Z, 0, -ctrl.X)),  -- 4: eski düzen (X=ileri, Z=sağ)
+	}
+end
+
+local function pickMoveMode(cf, ctrl, ref)
+	local cands = moveCandidates(cf, ctrl)
+	local refUnit = ref.Unit
+	local best, bestIdx = nil, MOVE_MODE
+	for i = 1, #cands do
+		local cm = Vector3.new(cands[i].X, 0, cands[i].Z)
+		if cm.Magnitude > 0.01 then
+			local d = (cm.Unit - refUnit).Magnitude
+			if best == nil or d < best then
+				best, bestIdx = d, i
+			end
+		end
+	end
+	return bestIdx
+end
+
+-- UIS:IsKeyDown hata verirse uçuşu düşürmesin
+local function keyDown(code)
+	local ok, value = pcall(function()
+		return UIS:IsKeyDown(code)
+	end)
+	return ok and value == true
+end
+
 local function startFly()
 	if State.Fly or not Root or not Humanoid or Humanoid.Health <= 0 then
 		return false
@@ -386,33 +425,25 @@ local function startFly()
 		local cf = camera.CFrame
 		local typing = UIS[S.GETFOCUSEDTEXTBOX](UIS) ~= nil
 
-		-- klavye girdisi: kamera-yerel düzlem (X = sağ, Z = -ileri)
-		local raw = Vector3.zero
+		-- klavye girdisi (iç düzlem: X = sağ, Z = +ileri)
+		local kb = Vector3.zero
 		if not typing then
-			raw = Vector3.new(
-				(UIS:IsKeyDown(KeyCode.D) and 1 or 0) - (UIS:IsKeyDown(KeyCode.A) and 1 or 0),
+			kb = Vector3.new(
+				(keyDown(KeyCode.D) and 1 or 0) - (keyDown(KeyCode.A) and 1 or 0),
 				0,
-				(UIS:IsKeyDown(KeyCode.S) and 1 or 0) - (UIS:IsKeyDown(KeyCode.W) and 1 or 0)
+				(keyDown(KeyCode.W) and 1 or 0) - (keyDown(KeyCode.S) and 1 or 0)
 			)
 		end
 
-		-- joystick / gamepad girdisi.
-		-- GetMoveVector() kamera-yerel düzlemdedir: X = sağ/sol, Y = 0, Z = ileri/geri (ileri = -Z).
-		-- v.Y daima 0 olduğu için ileri/geri bileşeni v.Z üzerinden alınır.
-		local mvInput = nil
+		-- joystick / gamepad girdisi (eksen düzeni sürüme göre değişebiliyor)
+		local ctrl = nil
 		if Controls and not typing then
 			local ok, v = pcall(function()
 				return Controls[S.GETMOVEVECTOR](Controls)
 			end)
 			if ok and type(v) == "Vector3" and v.Magnitude > 0.01 then
-				mvInput = Vector3.new(v.X, 0, v.Z)
+				ctrl = Vector3.new(v.X, 0, v.Z)
 			end
-		end
-
-		-- klavye ve joystick girdileri birlikte kullanılır
-		local input = raw
-		if mvInput then
-			input = input + mvInput
 		end
 
 		local vertical = 0
@@ -446,8 +477,33 @@ local function startFly()
 			rightFlat = rightFlat.Unit
 		end
 
-		-- yön: girdi kamera-yerel düzlemde (X = sağ, Z = -ileri)
-		local direction = flat * (-input.Z) + rightFlat * input.X + Vector3.yAxis * math.clamp(vertical, -1, 1)
+		-- yön hesabı: her şey DÜNYA-UZAYINA çevrilir.
+		-- klavye belirleyicidir; joystick/gamepad kalibre edilmiş yorumla kullanılır.
+		local dir = Vector3.zero
+
+		if kb.Magnitude > 0.01 then
+			dir = flat * kb.Z + rightFlat * kb.X
+			-- kontrol modülü de aktifse yorum modunu kalibre et
+			if ctrl then
+				MOVE_MODE = pickMoveMode(cf, ctrl, dir)
+			end
+		elseif ctrl then
+			local cands = moveCandidates(cf, ctrl)
+			-- referans: Humanoid.MoveDirection (dünya-uzayı, tüm cihazlar)
+			local ref = Vector3.zero
+			if Humanoid then
+				local md = Humanoid.MoveDirection
+				if md and md.Magnitude > 0.01 then
+					ref = Vector3.new(md.X, 0, md.Z)
+				end
+			end
+			if ref.Magnitude > 0.01 then
+				MOVE_MODE = pickMoveMode(cf, ctrl, ref)
+			end
+			dir = cands[MOVE_MODE]
+		end
+
+		local direction = dir + Vector3.yAxis * math.clamp(vertical, -1, 1)
 		if direction.Magnitude > 1 then
 			direction = direction.Unit
 		end
