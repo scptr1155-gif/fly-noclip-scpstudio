@@ -1007,6 +1007,8 @@ do
 	end
 end
 
+local __ok, __err = xpcall(function()
+
 --------------------------------------------------------------------
 -- 5) Arayüz kurulumu
 --------------------------------------------------------------------
@@ -1524,7 +1526,7 @@ local DiscordIcon = new(S.LABEL, {
 
 local DiscordText = new(S.LABEL, {
 	Position = UDim2.fromOffset(44, 0),
-	Size = UDim2.new(1, -110, 48),
+	Size = UDim2.new(1, -110, 0, 48),
 	BackgroundTransparency = 1,
 	Font = Enum.Font.GothamBold,
 	TextSize = 14,
@@ -1746,8 +1748,8 @@ DiscordBox.FocusLost:Connect(function()
 	end)
 end)
 
--- kutuya tekrar odaklanınca davet metnini ve seçimi tazele
-DiscordBox.FocusGained:Connect(function()
+-- kutuya tekrar odaklanınca (TextBox olayı: Focused) davet metnini ve seçimi tazele
+DiscordBox.Focused:Connect(function()
 	if DiscordBox.Text ~= S.INVITE then
 		DiscordBox.Text = S.INVITE
 	end
@@ -2098,3 +2100,41 @@ task.spawn(function()
 		end
 	end
 end)
+
+end, function(e)
+	return debug.traceback(tostring(e), 2)
+end)
+
+-- Hata olursa sessizce takılmak yerine ekranda gösterir (kopyalanabilir)
+if not __ok then
+	warn("[CR-SETA] " .. tostring(__err))
+	local old = PlayerGui:FindFirstChild("crseta_error")
+	if old then
+		old:Destroy()
+	end
+	local holder = Instance.new("ScreenGui")
+	holder.Name = "crseta_error"
+	holder.ResetOnSpawn = false
+	holder.DisplayOrder = 200
+	holder.Parent = PlayerGui
+	local box = Instance.new("TextBox")
+	box.AnchorPoint = Vector2.new(0.5, 0)
+	box.Position = UDim2.new(0.5, 0, 0, 20)
+	box.Size = UDim2.fromOffset(520, 150)
+	box.BackgroundColor3 = Color3.fromRGB(35, 12, 16)
+	box.TextColor3 = Color3.fromRGB(255, 190, 195)
+	box.Font = Enum.Font.Code
+	box.TextSize = 13
+	box.TextWrapped = true
+	box.MultiLine = true
+	box.ClearTextOnFocus = false
+	box.TextEditable = false
+	box.TextXAlignment = Enum.TextXAlignment.Left
+	box.TextYAlignment = Enum.TextYAlignment.Top
+	box.Text = "CR-SETA HATA (kopyalayıp gönderin):\n" .. tostring(__err)
+	box.Parent = holder
+	Instance.new("UICorner", box).CornerRadius = UDim.new(0, 10)
+	local stroke = Instance.new("UIStroke", box)
+	stroke.Color = Color3.fromRGB(235, 80, 90)
+	stroke.Thickness = 1.5
+end
