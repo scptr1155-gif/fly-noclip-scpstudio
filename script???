@@ -1748,8 +1748,8 @@ DiscordBox.FocusLost:Connect(function()
 	end)
 end)
 
--- kutuya tekrar odaklanınca davet metnini ve seçimi tazele
-DiscordBox.FocusGained:Connect(function()
+-- kutuya tekrar odaklanınca (TextBox olayı: Focused) davet metnini ve seçimi tazele
+DiscordBox.Focused:Connect(function()
 	if DiscordBox.Text ~= S.INVITE then
 		DiscordBox.Text = S.INVITE
 	end
