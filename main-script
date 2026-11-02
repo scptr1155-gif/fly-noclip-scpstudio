@@ -288,6 +288,15 @@ local lastFacing = nil -- karakterin baktığı yön (gereksiz güncellemeyi ön
 -- GetMoveVector() yorum modu (çalışma anında kalibre edilir):
 -- 1 = kamera-yerel ileri=-Z | 2 = kamera-yerel ileri=+Z | 3 = dünya-uzayı | 4 = eski düzen (X=ileri)
 local MOVE_MODE = 2
+-- canlı teşhis (F9) için paylaşılan durum
+local dbg = {
+	kb = Vector3.zero,
+	ctrl = Vector3.zero,
+	dir = Vector3.zero,
+	vel = Vector3.zero,
+	av = Vector3.zero,
+}
+local updateDebug = nil
 
 task.spawn(function()
 	local ok, module = pcall(function()
@@ -482,11 +491,10 @@ local function startFly()
 		local dir = Vector3.zero
 
 		if kb.Magnitude > 0.01 then
-			-- W/S: kameranın TAM bakış yönü (yukarı/aşağı eğim dahil), A/D: yatay yan hareket
-			dir = cf.LookVector * kb.Z + rightFlat * kb.X
-			-- kontrol modülü de aktifse yorum modunu kalibre et (referans yatay kalmalı)
+			dir = flat * kb.Z + rightFlat * kb.X
+			-- kontrol modülü de aktifse yorum modunu kalibre et
 			if ctrl then
-				MOVE_MODE = pickMoveMode(cf, ctrl, flat * kb.Z + rightFlat * kb.X)
+				MOVE_MODE = pickMoveMode(cf, ctrl, dir)
 			end
 		elseif ctrl then
 			local cands = moveCandidates(cf, ctrl)
@@ -511,6 +519,31 @@ local function startFly()
 
 		velocity = velocity:Lerp(direction * CONFIG.Speed, math.min(1, dt * 12))
 		linear[S.VECTORVELOCITY] = velocity
+
+		-- Bazı oyunlarda kısıt çalışmıyor: hızı doğrudan da uygula
+		if Root and Root.Parent then
+			pcall(function()
+				Root.AssemblyLinearVelocity = velocity
+			end)
+		end
+
+		-- Oyunun kendi scriptleri PlatformStand/AutoRotate'i sıfırlarsa düzelt
+		if Humanoid[S.PLATFORMSTAND] ~= true then
+			Humanoid[S.PLATFORMSTAND] = true
+		end
+		if Humanoid[S.AUTOROTATE] ~= false then
+			Humanoid[S.AUTOROTATE] = false
+		end
+
+		-- teşhis verileri
+		dbg.kb = kb
+		dbg.ctrl = ctrl or Vector3.zero
+		dbg.dir = dir
+		dbg.vel = velocity
+		dbg.av = Root and Root.AssemblyLinearVelocity or Vector3.zero
+		if updateDebug then
+			updateDebug()
+		end
 
 		-- karakter kameraya baksın (yalnızca yön değiştiğinde güncelle)
 		if lastFacing ~= flat then
@@ -1747,6 +1780,84 @@ local LauncherGradient = new(S.GRADIENT, {
 }, Launcher)
 local LauncherScale = new(S.SCALE, {}, Launcher)
 fx(Launcher, 15)
+
+--------------------------------------------------------------------
+-- 5b) Canlı teşhis katmanı (F9)
+--------------------------------------------------------------------
+local DebugOverlay, DebugLabel
+local debugOn = false
+
+local function buildDebug()
+	if DebugOverlay then
+		return
+	end
+	DebugOverlay = new(S.FRAME, {
+		Position = UDim2.fromOffset(12, 12),
+		Size = UDim2.fromOffset(330, 210),
+		BackgroundColor3 = Color3.fromRGB(8, 12, 20),
+		BackgroundTransparency = 0.1,
+		BorderSizePixel = 0,
+		Visible = false,
+		ZIndex = 60,
+	}, Gui)
+	corner(DebugOverlay, 10)
+	stroke(DebugOverlay, COLORS.accent, 1.5, 0.25)
+	DebugLabel = new(S.LABEL, {
+		Position = UDim2.fromOffset(10, 8),
+		Size = UDim2.new(1, -20, 1, -16),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.Code,
+		TextSize = 12,
+		TextColor3 = COLORS.text,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		TextWrapped = true,
+		ZIndex = 61,
+	}, DebugOverlay)
+end
+
+local function fmt(v)
+	if not v then
+		return "-"
+	end
+	return string.format("(%.2f, %.2f, %.2f)", v.X, v.Y, v.Z)
+end
+
+updateDebug = function()
+	if not debugOn or not DebugLabel then
+		return
+	end
+	local lines = {
+		"CR-SETA FLY DEBUG  (F9: kapat)",
+		"Controls yuklu : " .. (Controls and "EVET" or "YOK"),
+		"MOVE_MODE      : " .. tostring(MOVE_MODE),
+		"klavye         : " .. fmt(dbg.kb),
+		"kontrol vektor : " .. fmt(dbg.ctrl),
+		"yon            : " .. fmt(dbg.dir),
+		"hedef hiz      : " .. fmt(dbg.vel),
+		"assembly hiz   : " .. fmt(dbg.av),
+		"Root           : " .. (Root and Root.Name or "YOK"),
+		"Humanoid HP    : " .. (Humanoid and tostring(Humanoid.Health) or "YOK"),
+		"PlatformStand  : " .. (Humanoid and tostring(Humanoid[S.PLATFORMSTAND]) or "-"),
+		"AutoRotate     : " .. (Humanoid and tostring(Humanoid[S.AUTOROTATE]) or "-"),
+	}
+	DebugLabel.Text = table.concat(lines, "\n")
+end
+
+UIS.InputBegan:Connect(function(input)
+	if input and input.KeyCode == KeyCode.F9 then
+		debugOn = not debugOn
+		if debugOn then
+			buildDebug()
+		end
+		if DebugOverlay then
+			DebugOverlay.Visible = debugOn
+		end
+		if debugOn then
+			updateDebug()
+		end
+	end
+end)
 TweenService:Create(LauncherGradient, TweenInfo.new(9, Ease.Linear, EaseDir.In, -1), {Rotation = 405}):Play()
 
 --------------------------------------------------------------------
