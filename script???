@@ -482,10 +482,11 @@ local function startFly()
 		local dir = Vector3.zero
 
 		if kb.Magnitude > 0.01 then
-			dir = flat * kb.Z + rightFlat * kb.X
-			-- kontrol modülü de aktifse yorum modunu kalibre et
+			-- W/S: kameranın TAM bakış yönü (yukarı/aşağı eğim dahil), A/D: yatay yan hareket
+			dir = cf.LookVector * kb.Z + rightFlat * kb.X
+			-- kontrol modülü de aktifse yorum modunu kalibre et (referans yatay kalmalı)
 			if ctrl then
-				MOVE_MODE = pickMoveMode(cf, ctrl, dir)
+				MOVE_MODE = pickMoveMode(cf, ctrl, flat * kb.Z + rightFlat * kb.X)
 			end
 		elseif ctrl then
 			local cands = moveCandidates(cf, ctrl)
