@@ -95,7 +95,7 @@ local Languages = {
 		copied = "Davet kopyalandı!",
 		manual = "Metni seçip kopyalayın",
 		failed = "Davet kullanılamıyor",
-		info = "WASD: Hareket | Space: Yüksel | Ctrl: Alçal | RShift: Gizle",
+		info = "WASD: Hareket | Space: Yüksel | Ctrl: Alçal | Insert: Gizle | Alt: Fare",
 		infoTouch = "Joystick: Hareket | ▲ ▼: Yüksel / Alçal",
 	},
 	EN = {
@@ -111,7 +111,7 @@ local Languages = {
 		copied = "Invite copied!",
 		manual = "Select the text and copy it",
 		failed = "Invite unavailable",
-		info = "WASD: Move | Space: Up | Ctrl: Down | RShift: Hide",
+		info = "WASD: Move | Space: Up | Ctrl: Down | Insert: Hide | Alt: Mouse",
 		infoTouch = "Joystick: Move | ▲ ▼: Up / Down",
 	},
 	DE = {
@@ -127,7 +127,7 @@ local Languages = {
 		copied = "Einladung kopiert!",
 		manual = "Text markieren und kopieren",
 		failed = "Einladung nicht verfügbar",
-		info = "WASD: Bewegen | Space: Hoch | Ctrl: Runter | RShift: Ausblenden",
+		info = "WASD: Bewegen | Space: Hoch | Ctrl: Runter | Insert: Ausblenden | Alt: Maus",
 		infoTouch = "Joystick: Bewegen | ▲ ▼: Hoch / Runter",
 	},
 	FR = {
@@ -143,7 +143,7 @@ local Languages = {
 		copied = "Invitation copiée !",
 		manual = "Sélectionnez et copiez le texte",
 		failed = "Invitation indisponible",
-		info = "WASD: Bouger | Space: Monter | Ctrl: Descendre | RShift: Cacher",
+		info = "WASD: Bouger | Space: Monter | Ctrl: Descendre | Insert: Cacher | Alt: Souris",
 		infoTouch = "Joystick: Bouger | ▲ ▼: Monter / Descendre",
 	},
 	ES = {
@@ -159,7 +159,7 @@ local Languages = {
 		copied = "¡Invitación copiada!",
 		manual = "Selecciona el texto y cópialo",
 		failed = "Invitación no disponible",
-		info = "WASD: Mover | Space: Subir | Ctrl: Bajar | RShift: Ocultar",
+		info = "WASD: Mover | Space: Subir | Ctrl: Bajar | Insert: Ocultar | Alt: Ratón",
 		infoTouch = "Joystick: Mover | ▲ ▼: Subir / Bajar",
 	},
 }
@@ -1067,9 +1067,24 @@ Close.Activated:Connect(function()
 	Gui:Destroy()
 end)
 
--- Sağ Shift ile gizle / göster
+-- Alt: Shift Lock açıkken fareyi serbest bırakır / tekrar kilitler
+local FreeMouse = new("TextButton", {
+	Size = UDim2.fromOffset(1, 1),
+	BackgroundTransparency = 1,
+	Text = "",
+	Modal = false,
+	Active = false,
+}, Gui)
+
+bind(UIS.InputBegan, function(input)
+	if input.KeyCode == Enum.KeyCode.LeftAlt then
+		FreeMouse.Modal = not FreeMouse.Modal
+	end
+end)
+
+-- Insert ile gizle / göster (Shift, Roblox'un Shift Lock tuşu olduğu için kullanılmıyor)
 bind(UIS.InputBegan, function(input, processed)
-	if processed or input.KeyCode ~= Enum.KeyCode.RightShift then
+	if processed or input.KeyCode ~= Enum.KeyCode.Insert then
 		return
 	end
 	State.Hidden = not State.Hidden
