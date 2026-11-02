@@ -1045,6 +1045,8 @@ Minimize.Activated:Connect(function()
 	end)
 end)
 
+local setMouseFree
+
 -- Kapat: her şeyi temizler
 Close.Activated:Connect(function()
 	if Closed then
@@ -1054,6 +1056,7 @@ Close.Activated:Connect(function()
 
 	stopFly()
 	stopClip()
+	setMouseFree(false)
 	if DiedConn then
 		DiedConn:Disconnect()
 	end
@@ -1076,9 +1079,25 @@ local FreeMouse = new("TextButton", {
 	Active = false,
 }, Gui)
 
+local MouseFree = false
+setMouseFree = function(on)
+	MouseFree = on
+	FreeMouse.Modal = on
+	pcall(function()
+		RunService:UnbindFromRenderStep("CRSETA_Mouse")
+	end)
+	if on then
+		-- Oyunun / Shift Lock'un fare kilidini her karede geri alır
+		RunService:BindToRenderStep("CRSETA_Mouse", Enum.RenderPriority.Camera.Value + 1, function()
+			UIS.MouseBehavior = Enum.MouseBehavior.Default
+			UIS.MouseIconEnabled = true
+		end)
+	end
+end
+
 bind(UIS.InputBegan, function(input)
-	if input.KeyCode == Enum.KeyCode.LeftAlt then
-		FreeMouse.Modal = not FreeMouse.Modal
+	if input.KeyCode == Enum.KeyCode.LeftAlt or input.KeyCode == Enum.KeyCode.RightAlt then
+		setMouseFree(not MouseFree)
 	end
 end)
 
