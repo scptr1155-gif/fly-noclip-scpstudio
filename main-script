@@ -1,18 +1,23 @@
--- SCP Studio | Key System
--- LocalScript -> StarterPlayer > StarterPlayerScripts (or run it from your executor)
+-- SCP Studio | Key System (v2)
+-- Run it from your executor, or LocalScript -> StarterPlayer > StarterPlayerScripts
+
+if not game:IsLoaded() then
+	game.Loaded:Wait()
+end
 
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
+
+repeat
+	task.wait()
+until Players.LocalPlayer
 local LocalPlayer = Players.LocalPlayer
 
 local K = {83, 67, 80, 33, 90, 17, 76, 41}
 local GET_KEY_LINK = {62,61,45,93,56,61,120,30,90,72,95,110,158,163,102,123,176,99,110,145,180,98,193,98,177,197,186,105,194,152,119,170,161,123,140,181,122,153,180,221,166,248}
 local KEY_URL = {62,61,45,93,56,61,120,30,60,64,72,51,100,162,101,113,89,87,94,142,126,165,116,142,136,133,134,163,133,153,140,166,161,210,140,174,153,215,179,144,221,244,230,144,196,2,183,150,200,197,194,168,211,32,212,237,229,225,46,6,240,27,252,29,233,237,2,26,68,53,254,39,251,74,25,40,34,95,44,246,49,24,50,75,116,116,40,85,65,137,115,41,128,64}
 local SCRIPT_URL = {62,61,45,93,56,61,120,30,60,64,72,51,100,162,101,113,89,87,94,142,126,165,116,142,136,133,134,163,133,153,140,166,161,210,140,174,153,215,179,144,221,244,230,144,196,2,183,150,200,197,194,168,211,32,212,237,229,225,46,6,240,27,252,29,233,237,2,26,68,53,254,39,251,74,25,40,34,95,44,246,49,24,50,75,116,100,52,99,69,65,53,24,128,113,134,58,56,140,140,147}
-local FN_LOAD = {66,50,58,81,56,119,83,88,88,66}
-local FN_HTTP = {30,61,45,93,44,134,77}
-local FN_CLIP = {35,44,45,78,69,138,81,99,87,64,67,105}
 
 local function D(t)
 	local out = {}
@@ -37,8 +42,34 @@ local function GetParent()
 			return res
 		end
 	end
-	return LocalPlayer:WaitForChild("PlayerGui")
+	return LocalPlayer:WaitForChild("PlayerGui", 15)
 end
+
+-- State / cleanup (also removes the previous copy when the script is executed again)
+local Gui
+local Closed = false
+local DragConns = {}
+
+local function Cleanup()
+	Closed = true
+	for _, c in ipairs(DragConns) do
+		pcall(function()
+			c:Disconnect()
+		end)
+	end
+	DragConns = {}
+	if Gui then
+		pcall(function()
+			Gui:Destroy()
+		end)
+		Gui = nil
+	end
+end
+
+if type(ENV.SCPKeyCleanup) == "function" then
+	pcall(ENV.SCPKeyCleanup)
+end
+ENV.SCPKeyCleanup = Cleanup
 
 -- Colors
 local BG = Color3.fromRGB(18, 18, 24)
@@ -66,15 +97,19 @@ local function Round(obj, radius, stroke)
 	end
 end
 
--- Remove an old copy
+-- GUI
 local Parent = GetParent()
+if not Parent then
+	warn("[SCP Studio] Could not find a place to put the GUI.")
+	return
+end
+
 local Old = Parent:FindFirstChild("SCPKeySystem")
 if Old then
 	Old:Destroy()
 end
 
--- GUI
-local Gui = Make("ScreenGui", {
+Gui = Make("ScreenGui", {
 	Name = "SCPKeySystem",
 	ResetOnSpawn = false,
 	IgnoreGuiInset = true,
@@ -92,7 +127,14 @@ local Main = Make("Frame", {
 }, Gui)
 Round(Main, 8, true)
 
-local Title = Make("TextLabel", {
+local Header = Make("Frame", {
+	Name = "Header",
+	BackgroundTransparency = 1,
+	Size = UDim2.new(1, 0, 0, 46),
+	Active = true,
+}, Main)
+
+Make("TextLabel", {
 	BackgroundTransparency = 1,
 	Position = UDim2.fromOffset(16, 8),
 	Size = UDim2.fromOffset(250, 32),
@@ -101,7 +143,7 @@ local Title = Make("TextLabel", {
 	TextColor3 = WHITE,
 	TextSize = 16,
 	TextXAlignment = Enum.TextXAlignment.Left,
-}, Main)
+}, Header)
 
 local Close = Make("TextButton", {
 	AnchorPoint = Vector2.new(1, 0),
@@ -112,7 +154,7 @@ local Close = Make("TextButton", {
 	Text = "X",
 	TextColor3 = GRAY,
 	TextSize = 18,
-}, Main)
+}, Header)
 
 Make("Frame", {
 	Position = UDim2.fromOffset(0, 46),
@@ -189,6 +231,9 @@ local Status = Make("TextLabel", {
 }, Main)
 
 local function SetStatus(text, color)
+	if Closed then
+		return
+	end
 	Status.Text = text
 	Status.TextColor3 = color or GRAY
 end
@@ -211,43 +256,47 @@ Close.MouseLeave:Connect(function()
 	Close.TextColor3 = GRAY
 end)
 
--- Dragging
-do
-	local dragging, dragInput, dragStart, startPos
-	Main.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-			local relY = input.Position.Y - Main.AbsolutePosition.Y
-			if relY <= 46 then
-				dragging = true
-				dragStart = input.Position
-				startPos = Main.Position
-				input.Changed:Connect(function()
-					if input.UserInputState == Enum.UserInputState.End then
-						dragging = false
-					end
-				end)
-			end
+-- Dragging (the global input listener only exists while a drag is in progress)
+Header.InputBegan:Connect(function(input)
+	if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
+		return
+	end
+	local dragStart = input.Position
+	local startPos = Main.Position
+	local moveConn, endConn
+
+	local function Stop()
+		if moveConn then
+			moveConn:Disconnect()
+			moveConn = nil
 		end
-	end)
-	Main.InputChanged:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-			dragInput = input
+		if endConn then
+			endConn:Disconnect()
+			endConn = nil
 		end
-	end)
-	UserInputService.InputChanged:Connect(function(input)
-		if dragging and input == dragInput then
-			local delta = input.Position - dragStart
+	end
+
+	moveConn = UserInputService.InputChanged:Connect(function(changed)
+		if changed.UserInputType == Enum.UserInputType.MouseMovement or changed.UserInputType == Enum.UserInputType.Touch then
+			local delta = changed.Position - dragStart
 			Main.Position = UDim2.new(
 				startPos.X.Scale, startPos.X.Offset + delta.X,
 				startPos.Y.Scale, startPos.Y.Offset + delta.Y
 			)
 		end
 	end)
-end
+	endConn = input.Changed:Connect(function()
+		if input.UserInputState == Enum.UserInputState.End then
+			Stop()
+		end
+	end)
+	table.insert(DragConns, moveConn)
+	table.insert(DragConns, endConn)
+end)
 
 -- Get Key
 GetKey.MouseButton1Click:Connect(function()
-	local clip = ENV[D(FN_CLIP)] or ENV.toclipboard
+	local clip = (type(setclipboard) == "function" and setclipboard) or (type(toclipboard) == "function" and toclipboard) or nil
 	if type(clip) ~= "function" then
 		SetStatus("Clipboard is not supported by your executor.", RED)
 		return
@@ -266,63 +315,98 @@ GetKey.MouseButton1Click:Connect(function()
 	end
 end)
 
--- Verify
-local Busy = false
+-- Key check
+local function CheckKey(input)
+	local ok, remote = pcall(function()
+		return game:HttpGet(D(KEY_URL))
+	end)
+	if not ok or type(remote) ~= "string" or remote == "" then
+		return false, "Could not reach the key server. Check your connection or executor."
+	end
+	if #remote > 200 then
+		return false, "The key server returned an unexpected response."
+	end
+	if Trim(remote) ~= input then
+		return false, "Invalid key. Click Get Key to get a valid one."
+	end
+	return true
+end
 
-local function Run()
-	Busy = true
+-- Main script loader (downloaded, compiled, then started on its own thread)
+local function LoadMain()
+	local ok, src = pcall(function()
+		return game:HttpGet(D(SCRIPT_URL))
+	end)
+	if not ok or type(src) ~= "string" or src == "" then
+		return false, "Could not download the script."
+	end
+	local compiled, fn = pcall(loadstring, src)
+	if not compiled or type(fn) ~= "function" then
+		return false, "Could not compile the script."
+	end
+	task.spawn(function()
+		local ran, err = pcall(fn)
+		if not ran then
+			warn("[SCP Studio] Script error: " .. tostring(err))
+		end
+	end)
+	return true
+end
+
+-- Submit
+local Busy = false
+local NextTry = 0
+
+local function Submit()
+	if Busy or Closed or os.clock() < NextTry then
+		return
+	end
+
 	local input = Trim(KeyBox.Text)
 	if input == "" then
 		SetStatus("Please enter a key.", RED)
-		Busy = false
 		return
 	end
-
-	SetStatus("Checking key...", GRAY)
-	local ok, remote = pcall(function()
-		return game[D(FN_HTTP)](game, D(KEY_URL))
-	end)
-	if not ok or type(remote) ~= "string" or remote == "" then
-		SetStatus("Could not reach the key server. Check your connection or executor.", RED)
-		Busy = false
-		return
-	end
-
-	if Trim(remote) ~= input then
+	if #input > 100 then
 		SetStatus("Invalid key. Click Get Key to get a valid one.", RED)
+		return
+	end
+
+	Busy = true
+	SetStatus("Checking key...", GRAY)
+
+	local ran, valid, msg = pcall(CheckKey, input)
+	if not ran then
+		warn("[SCP Studio] " .. tostring(valid))
+		valid, msg = false, "Unexpected error. Try again."
+	end
+	if Closed then
+		return
+	end
+	if not valid then
+		SetStatus(msg, RED)
+		NextTry = os.clock() + 1.5
 		Busy = false
 		return
 	end
 
 	SetStatus("Key accepted! Loading script...", GREEN)
-	task.wait(0.5)
-	Gui.Enabled = false
-
-	local loaded, err = pcall(function()
-		local ls = ENV[D(FN_LOAD)]
-		local src = game[D(FN_HTTP)](game, D(SCRIPT_URL))
-		ls(src)()
-	end)
-
-	if loaded then
-		Gui:Destroy()
-	else
-		Gui.Enabled = true
-		SetStatus("Failed to load the script. Try again.", RED)
-		warn("[SCP Studio] " .. tostring(err))
-	end
-	Busy = false
-end
-
-local function Submit()
-	if Busy then
+	task.wait(0.4)
+	if Closed then
 		return
 	end
-	local ok, err = pcall(Run)
-	if not ok then
+
+	local ranLoad, loaded, loadMsg = pcall(LoadMain)
+	if not ranLoad then
+		warn("[SCP Studio] " .. tostring(loaded))
+		loaded, loadMsg = false, "Failed to load the script. Try again."
+	end
+	if loaded then
+		Cleanup()
+	else
+		SetStatus(loadMsg, RED)
+		NextTry = os.clock() + 1.5
 		Busy = false
-		SetStatus("Unexpected error. Try again.", RED)
-		warn("[SCP Studio] " .. tostring(err))
 	end
 end
 
@@ -332,6 +416,4 @@ KeyBox.FocusLost:Connect(function(enterPressed)
 		Submit()
 	end
 end)
-Close.MouseButton1Click:Connect(function()
-	Gui:Destroy()
-end)
+Close.MouseButton1Click:Connect(Cleanup)
