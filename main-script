@@ -593,6 +593,421 @@ local function trackDrag(handle, onBegin, onMove)
 end
 
 --------------------------------------------------------------------
+-- 4b) Anahtar sistemi (GitHub listesi · her kod için ayrı 24 saat)
+--------------------------------------------------------------------
+local K = {
+	K_URL = decode({83, 218, 70, 158, 237, 56, 201, 57, 145, 177, 192, 156, 79, 80, 40, 225, 16, 92, 207, 86, 117, 200, 41, 116, 112, 21, 139, 91, 55, 139, 232, 42, 106, 26, 254, 185, 44, 49, 192, 29, 73, 164, 252, 89, 79, 223, 126, 59, 73}),
+	K_RAW = decode({243, 84, 230, 62, 141, 216, 105, 217, 49, 81, 105, 64, 249, 241, 200, 133, 154, 247, 116, 247, 20, 82, 191, 24, 94, 161, 40, 251, 215, 110, 71, 205, 225, 142, 170, 39, 121, 222, 77, 189, 247, 108, 103, 53, 4, 187, 13, 228, 176, 9, 21, 235, 167, 168, 137, 67, 101, 171, 64, 157, 132, 10, 117, 206, 38, 112, 247, 195, 139, 37, 56, 200, 155, 72, 101, 223, 65, 138, 25, 134, 117, 37, 34, 235, 190}),
+	K_HG = decode({39, 192, 45, 101, 153, 211, 37, 141, 237}),
+	K_RQ1 = decode({102, 9, 243, 97, 183, 10, 73, 231, 157}),
+	K_RQ2 = decode({167, 40, 214, 167, 114, 44, 28, 181, 147, 36, 94, 9, 37, 115}),
+	K_WF = decode({13, 203, 165, 73, 118, 30, 87, 169, 52, 149, 176}),
+	K_RF = decode({19, 60, 223, 98, 120, 211, 48, 125, 193, 23}),
+	K_IF = decode({211, 124, 230, 182, 144, 60, 87, 9}),
+	K_GSTN = decode({138, 90, 16, 118, 211, 44, 86, 190, 14, 74, 168, 16, 250, 193, 101, 83, 0, 199}),
+	K_FILE = decode({25, 4, 146, 234, 121, 64, 250, 163, 164, 70, 27, 180, 228, 92, 186, 16, 133}),
+	K_SALT = decode({94, 249, 160, 199, 59, 143, 238, 103, 232, 213, 139, 126, 72, 33, 236, 110, 167, 180, 113, 124, 247}),
+	K_GENV = decode({150, 240, 239, 176, 129, 95, 254, 39, 202}),
+}
+
+local KEY_LIFETIME = 24 * 60 * 60 -- her kod ilk girişten itibaren 24 saat
+local KEY_RECHECK = 300 -- liste 5 dakikada bir tekrar doğrulanır
+
+local function getGlobal(name)
+	local ok, value = pcall(function()
+		return (getgenv and getgenv() or getfenv())[name]
+	end)
+	return ok and value or nil
+end
+
+local function nowTime()
+	local ok, value = pcall(function()
+		return workspace[K.K_GSTN](workspace)
+	end)
+	if ok and type(value) == "number" then
+		return value
+	end
+	return os.time()
+end
+
+local function khash(str)
+	local h1, h2 = 5381, 52711
+	for i = 1, #str do
+		local b = str:byte(i)
+		h1 = (h1 * 33 + b) % 4294967296
+		h2 = (h2 * 131 + b * i) % 4294967291
+	end
+	return string.format("%08x%08x", h1, h2)
+end
+
+local function mac(...)
+	return khash(table.concat({...}, "|") .. K.K_SALT)
+end
+
+local function normalizeKey(text)
+	return ((tostring(text or ""):gsub("%s+", "")):upper())
+end
+
+local function httpGet(url)
+	for _, name in ipairs({K.K_RQ1, K.K_RQ2}) do
+		local fn = getGlobal(name)
+		if type(fn) == "function" then
+			local ok, res = pcall(fn, {Url = url, Method = "GET"})
+			if ok and type(res) == "table" and type(res.Body) == "string"
+				and (res.StatusCode == 200 or res.Success) then
+				return res.Body
+			end
+		end
+	end
+	local ok, res = pcall(function()
+		return game[K.K_HG](game, url, true)
+	end)
+	if ok and type(res) == "string" and #res > 0 then
+		return res
+	end
+	return nil
+end
+
+local function fetchKeys()
+	local body = httpGet(K.K_RAW .. "?t=" .. tostring(math.floor(nowTime())))
+	if not body then
+		return nil
+	end
+	local keys = {}
+	for line in body:gmatch("[^\r\n]+") do
+		local code = normalizeKey(line)
+		if code ~= "" and code:sub(1, 1) ~= "#" then
+			keys[code] = true
+		end
+	end
+	return keys
+end
+
+-- Yerel kayıt: her kodun ilk kullanım zamanı (MAC ile korunur)
+local MemoryStore = {}
+
+local function loadStore()
+	local store = {started = {}, last = nil}
+	local raw = MemoryStore.raw
+	local isfile, readfile = getGlobal(K.K_IF), getGlobal(K.K_RF)
+	if type(isfile) == "function" and type(readfile) == "function" then
+		local ok, data = pcall(function()
+			if isfile(K.K_FILE) then
+				return readfile(K.K_FILE)
+			end
+		end)
+		if ok and type(data) == "string" then
+			raw = data
+		end
+	end
+	for line in tostring(raw or ""):gmatch("[^\r\n]+") do
+		local kind, a, b, c = line:match("^(%a)|([^|]*)|([^|]*)|?([^|]*)$")
+		if kind == "K" and mac("K", a, b) == c then
+			store.started[a] = tonumber(b)
+		elseif kind == "L" and mac("L", a) == b then
+			store.last = a
+		end
+	end
+	return store
+end
+
+local function saveStore(store)
+	local lines = {}
+	for id, started in pairs(store.started) do
+		table.insert(lines, string.format("K|%s|%s|%s", id, tostring(started), mac("K", id, tostring(started))))
+	end
+	if store.last then
+		table.insert(lines, string.format("L|%s|%s", store.last, mac("L", store.last)))
+	end
+	local data = table.concat(lines, "\n")
+	MemoryStore.raw = data
+	local writefile = getGlobal(K.K_WF)
+	if type(writefile) == "function" then
+		pcall(writefile, K.K_FILE, data)
+	end
+end
+
+-- Doğrulama: ok, bitişZamanı | false, hata ("empty" / "net" / "invalid" / "expired")
+local function verifyKey(input, keysOverride)
+	local code = normalizeKey(input)
+	if code == "" then
+		return false, "empty"
+	end
+	local keys = keysOverride or fetchKeys()
+	if not keys then
+		return false, "net"
+	end
+	if not keys[code] then
+		return false, "invalid"
+	end
+
+	local store = loadStore()
+	local id = khash(code)
+	local t = nowTime()
+	local started = store.started[id]
+	if not started then
+		started = t
+		store.started[id] = started
+	end
+	if t >= started + KEY_LIFETIME then
+		return false, "expired"
+	end
+	store.last = code
+	saveStore(store)
+	return true, started + KEY_LIFETIME, code
+end
+
+local function formatRemaining(seconds)
+	seconds = math.max(0, math.floor(seconds))
+	local h = math.floor(seconds / 3600)
+	local m = math.floor((seconds % 3600) / 60)
+	if State.Language == "TR" then
+		return string.format("%d sa %d dk", h, m)
+	end
+	return string.format("%dh %dm", h, m)
+end
+
+local KeyText = {
+	TR = {
+		title = "CR-SETA · Giriş", sub = "Devam etmek için anahtar gerekli",
+		placeholder = "Anahtarı yapıştır (örn. 123-456-789-0000)",
+		enter = "GİRİŞ", get = "GET KEY", checking = "Kontrol ediliyor...",
+		empty = "Lütfen bir anahtar yazın.", net = "Anahtar listesine ulaşılamadı. İnterneti kontrol edin.",
+		invalid = "Geçersiz anahtar.", expired = "Bu anahtarın 24 saatlik süresi doldu.",
+		ok = "Doğrulandı · kalan süre: ", copied = "Link kopyalandı! Tarayıcıda açıp anahtarı alın.",
+		manual = "Linki seçip kopyalayın (Ctrl+C)", wait = "Çok fazla deneme. Bekleyin: ",
+		ended = "Anahtar süresi doldu veya listeden kaldırıldı.",
+	},
+	EN = {
+		title = "CR-SETA · Login", sub = "A key is required to continue",
+		placeholder = "Paste your key (e.g. 123-456-789-0000)",
+		enter = "LOGIN", get = "GET KEY", checking = "Checking...",
+		empty = "Please enter a key.", net = "Could not reach the key list. Check your connection.",
+		invalid = "Invalid key.", expired = "This key's 24 hour period has expired.",
+		ok = "Verified · time left: ", copied = "Link copied! Open it in your browser to get a key.",
+		manual = "Select the link and copy it (Ctrl+C)", wait = "Too many tries. Wait: ",
+		ended = "Your key expired or was removed from the list.",
+	},
+}
+
+local function kt(key)
+	local pack = KeyText[State.Language] or KeyText.EN
+	return pack[key] or KeyText.EN[key] or key
+end
+
+local function copyText(text)
+	local fn = getGlobal(S.SETCLIPBOARD) or getGlobal(S.TOCLIPBOARD)
+	return type(fn) == "function" and pcall(fn, text)
+end
+
+local function keyToast(text, color)
+	local old = PlayerGui:FindFirstChild("crseta_toast")
+	if old then
+		old:Destroy()
+	end
+	local holder = new("ScreenGui", {Name = "crseta_toast", ResetOnSpawn = false, DisplayOrder = 120}, PlayerGui)
+	local label = new("TextLabel", {
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.5, 0, 1, 40),
+		Size = UDim2.fromOffset(300, 38),
+		BackgroundColor3 = COLORS.panel,
+		Font = Enum.Font.GothamSemibold,
+		Text = text,
+		TextSize = 13,
+		TextColor3 = color or COLORS.text,
+	}, holder)
+	corner(label, 10)
+	stroke(label, color or COLORS.accent, 1.5, 0.2)
+	tween(label, 0.35, {Position = UDim2.new(0.5, 0, 1, -28)}, Ease.Back)
+	task.delay(3.2, function()
+		if label.Parent then
+			tween(label, 0.3, {Position = UDim2.new(0.5, 0, 1, 60)}, Ease.Quad, EaseDir.In)
+			task.wait(0.35)
+			holder:Destroy()
+		end
+	end)
+end
+
+-- Kapı: geçerli anahtar girilene kadar bekler, bitiş zamanını döndürür
+local function runKeyGate(message)
+	local ui = new("ScreenGui", {Name = "crseta_key", ResetOnSpawn = false, DisplayOrder = 100}, PlayerGui)
+	-- Modal: Shift Lock / oyun fare kilidi açıkken bile fare serbest kalır
+	new("TextButton", {Size = UDim2.fromOffset(1, 1), BackgroundTransparency = 1, Text = "", Modal = true}, ui)
+
+	local card = new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(0.5, 0, 0.5, 20),
+		Size = UDim2.fromOffset(360, 262),
+		BackgroundColor3 = COLORS.bgTop,
+		BorderSizePixel = 0,
+	}, ui)
+	corner(card, 18)
+	local cardStroke = stroke(card, COLORS.accent, 1.8, 0.1)
+	local cardGradient = new("UIGradient", {
+		Color = ColorSequence.new({
+			ColorSequenceKeypoint.new(0, COLORS.accent),
+			ColorSequenceKeypoint.new(0.5, COLORS.accent2),
+			ColorSequenceKeypoint.new(1, COLORS.accent),
+		}),
+	}, cardStroke)
+	TweenService:Create(cardGradient, TweenInfo.new(4, Ease.Linear, EaseDir.In, -1), {Rotation = 360}):Play()
+	local cardScale = new("UIScale", {Scale = 0.85}, card)
+
+	local title = new("TextLabel", {
+		Position = UDim2.fromOffset(20, 16), Size = UDim2.new(1, -40, 0, 26),
+		BackgroundTransparency = 1, Font = Enum.Font.GothamBold, TextSize = 21,
+		TextColor3 = COLORS.text, TextXAlignment = Enum.TextXAlignment.Left,
+	}, card)
+	local sub = new("TextLabel", {
+		Position = UDim2.fromOffset(20, 44), Size = UDim2.new(1, -40, 0, 16),
+		BackgroundTransparency = 1, Font = Enum.Font.Gotham, TextSize = 12,
+		TextColor3 = COLORS.muted, TextXAlignment = Enum.TextXAlignment.Left,
+	}, card)
+
+	local box = new("TextBox", {
+		Position = UDim2.fromOffset(20, 76), Size = UDim2.new(1, -40, 0, 44),
+		BackgroundColor3 = COLORS.panel, Font = Enum.Font.GothamSemibold, TextSize = 15,
+		TextColor3 = COLORS.text, PlaceholderColor3 = COLORS.muted, Text = "",
+		ClearTextOnFocus = false,
+	}, card)
+	corner(box, 11)
+	local boxStroke = stroke(box, COLORS.button, 1.4, 0)
+
+	local enterBtn = new("TextButton", {
+		Position = UDim2.fromOffset(20, 134), Size = UDim2.new(0.5, -26, 0, 42),
+		BackgroundColor3 = COLORS.accent, AutoButtonColor = false,
+		Font = Enum.Font.GothamBold, TextSize = 14, TextColor3 = COLORS.text,
+	}, card)
+	corner(enterBtn, 11)
+	fx(enterBtn, 11, Color3.fromRGB(40, 185, 255))
+
+	local getBtn = new("TextButton", {
+		AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -20, 0, 134),
+		Size = UDim2.new(0.5, -26, 0, 42), BackgroundColor3 = COLORS.discord,
+		AutoButtonColor = false, Font = Enum.Font.GothamBold, TextSize = 14, TextColor3 = COLORS.text,
+	}, card)
+	corner(getBtn, 11)
+	fx(getBtn, 11, COLORS.discordHover)
+
+	local linkBox = new("TextBox", {
+		Position = UDim2.fromOffset(20, 186), Size = UDim2.new(1, -40, 0, 30),
+		BackgroundColor3 = COLORS.panel, Font = Enum.Font.Gotham, TextSize = 11,
+		TextColor3 = COLORS.text, Text = K.K_URL, TextEditable = false,
+		ClearTextOnFocus = false, Visible = false,
+	}, card)
+	corner(linkBox, 8)
+
+	local status = new("TextLabel", {
+		Position = UDim2.fromOffset(20, 222), Size = UDim2.new(1, -40, 0, 30),
+		BackgroundTransparency = 1, Font = Enum.Font.GothamSemibold, TextSize = 12,
+		TextColor3 = COLORS.muted, TextWrapped = true, Text = message or "",
+		TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+	}, card)
+
+	local function setStatus(text, color)
+		status.Text = text
+		status.TextColor3 = color or COLORS.muted
+	end
+	local function applyTexts()
+		title.Text, sub.Text = kt("title"), kt("sub")
+		box.PlaceholderText = kt("placeholder")
+		enterBtn.Text, getBtn.Text = kt("enter"), kt("get")
+	end
+	applyTexts()
+	if message then
+		setStatus(message, COLORS.red)
+	end
+	tween(cardScale, 0.4, {Scale = 1}, Ease.Back)
+	tween(card, 0.4, {Position = UDim2.new(0.5, 0, 0.5, 0)}, Ease.Quint)
+
+	local result = Instance.new("BindableEvent")
+	local busy, fails, lockedUntil = false, 0, 0
+
+	local function shake()
+		local base = card.Position
+		for _, dx in ipairs({-8, 8, -5, 5, 0}) do
+			tween(card, 0.05, {Position = UDim2.new(base.X.Scale, base.X.Offset + dx, base.Y.Scale, base.Y.Offset)})
+			task.wait(0.05)
+		end
+		tween(boxStroke, 0.4, {Color = COLORS.button})
+	end
+
+	local function submit()
+		if busy then
+			return
+		end
+		local t = os.clock()
+		if t < lockedUntil then
+			setStatus(kt("wait") .. math.ceil(lockedUntil - t) .. "s", COLORS.red)
+			return
+		end
+		busy = true
+		setStatus(kt("checking"), COLORS.muted)
+		local ok, a = verifyKey(box.Text)
+		if ok then
+			local remaining = a - nowTime()
+			setStatus(kt("ok") .. formatRemaining(remaining), COLORS.green)
+			tween(boxStroke, 0.2, {Color = COLORS.green})
+			task.wait(0.7)
+			tween(cardScale, 0.25, {Scale = 0.85}, Ease.Back, EaseDir.In)
+			task.wait(0.25)
+			ui:Destroy()
+			keyToast(kt("ok") .. formatRemaining(remaining), COLORS.green)
+			result:Fire(a)
+			return
+		end
+		if a ~= "net" and a ~= "empty" then
+			fails += 1
+			if fails >= 5 then
+				fails = 0
+				lockedUntil = os.clock() + 20
+			end
+		end
+		setStatus(kt(a) or a, COLORS.red)
+		tween(boxStroke, 0.15, {Color = COLORS.red})
+		shake()
+		busy = false
+	end
+
+	enterBtn.Activated:Connect(submit)
+	box.FocusLost:Connect(function(enterPressed)
+		if enterPressed then
+			submit()
+		end
+	end)
+	getBtn.Activated:Connect(function()
+		if copyText(K.K_URL) then
+			linkBox.Visible = false
+			setStatus(kt("copied"), COLORS.green)
+		else
+			linkBox.Visible = true
+			setStatus(kt("manual"), COLORS.muted)
+			pcall(function()
+				linkBox:CaptureFocus()
+			end)
+		end
+	end)
+
+	return result.Event:Wait()
+end
+
+-- Başlangıç: kayıtlı anahtar hâlâ geçerliyse sessizce giriş yapılır
+local KeyExpiry
+do
+	local store = loadStore()
+	if store.last then
+		local ok, a = verifyKey(store.last)
+		if ok then
+			KeyExpiry = a
+			keyToast(kt("ok") .. formatRemaining(a - nowTime()), COLORS.green)
+		end
+	end
+	if not KeyExpiry then
+		KeyExpiry = runKeyGate()
+	end
+end
+
+--------------------------------------------------------------------
 -- 5) Arayüz kurulumu
 --------------------------------------------------------------------
 local Previous = PlayerGui[S.FINDIRSTCHILD](PlayerGui, S.GUINAME)
@@ -1649,5 +2064,37 @@ task.spawn(function()
 				tween(obj, 0.45, {Position = target}, Ease.Quint)
 			end
 		end)
+	end
+end)
+
+--------------------------------------------------------------------
+-- 12) Anahtar bekçisi (süre dolunca / listeden silinince kilitler)
+--------------------------------------------------------------------
+task.spawn(function()
+	local lastCheck = os.clock()
+	while Gui.Parent do
+		task.wait(5)
+		local expired = nowTime() >= KeyExpiry
+		if not expired and os.clock() - lastCheck >= KEY_RECHECK then
+			lastCheck = os.clock()
+			local keys = fetchKeys()
+			if keys then
+				local store = loadStore()
+				if not store.last or not keys[store.last] then
+					expired = true
+				end
+			end
+		end
+		if expired then
+			stopFly()
+			stopClip()
+			Main.Visible = false
+			Launcher.Visible = false
+			Refresh()
+			KeyExpiry = runKeyGate(kt("ended"))
+			lastCheck = os.clock()
+			Main.Visible = not State.Hidden
+			Launcher.Visible = State.Hidden
+		end
 	end
 end)
