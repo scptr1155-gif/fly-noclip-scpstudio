@@ -1,69 +1,146 @@
--- CR-SETA
--- LocalScript -> StarterPlayer > StarterPlayerScripts
+--============================================================
+--  CR-SETA  ·  MULTI TOOL
+--  ------------------------------------------------------------
+--  LocalScript  ->  StarterPlayer > StarterPlayerScripts
+--
+--  · Uçuş (Fly), NoClip ve hız kontrolü
+--  · 5 dil (TR / EN / DE / FR / ES)
+--  · Discord davetini tek tıkla kopyalama
+--  · Kritik sabitler XOR + checksum ile şifrelenmiştir
+--  · Giriş / hover / geçiş / toast animasyonları
+--============================================================
 
-local Players = game:GetService("Players")
-local UIS = game:GetService("UserInputService")
-local RunService = game:GetService("RunService")
-local TweenService = game:GetService("TweenService")
+--------------------------------------------------------------------
+-- 0) Şifre çözücü (XOR + checksum)
+--------------------------------------------------------------------
+local MK = {179, 92, 37, 240, 128, 65, 13, 201, 76, 158, 222, 41, 97, 190, 250, 84, 33, 145, 118, 60}
 
-local Player = Players.LocalPlayer
-local PlayerGui = Player:WaitForChild("PlayerGui")
-
-----------------------------------------------------------------------
--- Şifreli sabitler (LCG akış şifresi + konuma bağlı kaydırma)
-----------------------------------------------------------------------
-
-local E_INVITE = {172,166,40,252,152,32,110,51,126,127,222,84,114,230,120,138,46,187,18,89,52,100,115,236,8,237,178,50}
-local E_GUI = {49,61,209,174,96,172,44}
-local E_CC = {67,173,152,167,113,25,113,145,177,218}
-local E_LV = {85,154,54,158,219,71,197,250,195,29,238,16,59,120}
-local E_AO = {253,105,186,253,128,96,215,140,197,48,9,30,173,48,121,243}
-local E_AT = {247,177,163,2,199,208,6,15,102,120}
-local E_VV = {221,252,85,195,3,55,214,157,238,226,46,247,3,59}
-local E_SC = {99,44,118,153,17,245,168,67,25,5,3,241}
-local E_TC = {10,28,0,209,163,92,165,170,185,62,206}
-
-local function D(t, seed)
-	local out, s = {}, seed
-	for i = 1, #t do
-		s = (s * 75 + 74) % 65537
-		out[i] = string.char((bit32.bxor(t[i], s % 256) - i * 7) % 256)
+local function bxor(a, b)
+	if bit32 then
+		return bit32.bxor(a, b)
 	end
-	return table.concat(out)
+	local result, place = 0, 1
+	while a > 0 or b > 0 do
+		local x, y = a % 2, b % 2
+		if x ~= y then
+			result = result + place
+		end
+		a = (a - x) / 2
+		b = (b - y) / 2
+		place = place * 2
+	end
+	return result
 end
 
-local INVITE = D(E_INVITE, 18311)
-local GUI_NAME = D(E_GUI, 4127)
-local CC = D(E_CC, 30211)
-local LV = D(E_LV, 9973)
-local AO = D(E_AO, 51407)
-local AT = D(E_AT, 22861)
-local VV = D(E_VV, 40009)
-local SC = D(E_SC, 7717)
-local TC = D(E_TC, 61223)
-
--- Bütünlük kontrolü: sabitler değiştirilirse davet devre dışı kalır
-do
-	local sum = 0
-	for i = 1, #INVITE do
-		sum += INVITE:byte(i) * i
+local function decode(chunk)
+	local salt, check = chunk[1], chunk[2]
+	local buffer, sum = {}, 0
+	for i = 1, #chunk - 2 do
+		local key = MK[((i + salt) % #MK) + 1]
+		local byte = (chunk[i + 2] - salt - i * 11) % 256
+		local plain = bxor(byte, key)
+		buffer[i] = string.char(plain)
+		sum = (sum + plain) % 256
 	end
-	if sum % 65521 ~= 33076 then
-		INVITE = nil
+	if sum ~= check then
+		error("CR-SETA: cipher integrity check failed", 0)
 	end
+	return table.concat(buffer)
 end
 
-local function getGlobal(name)
-	local ok, value = pcall(function()
-		return (getgenv and getgenv() or getfenv())[name]
-	end)
-	return ok and value or nil
-end
+local S = {}
 
-----------------------------------------------------------------------
--- Ayarlar
-----------------------------------------------------------------------
+S.PLAYERS = decode({59, 224, 41, 129, 160, 240, 87, 176, 6})
+S.UIS = decode({47, 128, 83, 50, 11, 182, 142, 65, 6, 168, 231, 95, 187, 1, 131, 254, 26, 116})
+S.RUN = decode({51, 6, 113, 20, 232, 102, 174, 88, 128, 224, 102, 218})
+S.TWEEN = decode({96, 212, 48, 119, 218, 98, 201, 24, 66, 170, 250, 50, 131, 13})
+S.LOCALPLAYER = decode({48, 88, 13, 247, 155, 92, 57, 28, 181, 200, 123, 177, 247})
+S.PLAYERGUI = decode({11, 146, 71, 243, 199, 100, 134, 48, 137, 172, 72})
+S.PLAYERSCRIPTS = decode({43, 85, 6, 110, 184, 7, 139, 89, 5, 205, 161, 112, 46, 207, 12})
+S.PLAYERMODULE = decode({42, 211, 213, 44, 107, 202, 13, 170, 74, 51, 218, 172, 117, 77})
+S.HUMANOID = decode({15, 53, 131, 9, 75, 152, 35, 132, 168, 251})
+S.ROOTPART = decode({53, 112, 242, 108, 162, 81, 132, 202, 92, 197, 15, 66, 157, 238, 33, 119, 24, 207})
+S.BASEPART = decode({12, 18, 19, 189, 84, 124, 4, 101, 167, 43})
+S.INST = decode({27, 53, 43, 33, 233, 164, 82, 45, 1, 164})
+S.GUI_CLS = decode({65, 133, 170, 1, 160, 104, 51, 202, 180, 100, 55})
+S.FRAME = decode({72, 235, 75, 230, 158, 192, 115})
+S.LABEL = decode({61, 133, 185, 232, 86, 158, 181, 39, 184, 144, 82})
+S.BUTTON = decode({88, 33, 45, 41, 202, 153, 139, 41, 197, 5, 185, 222})
+S.TEXTBOX = decode({73, 206, 2, 144, 195, 90, 180, 222, 97})
+S.CORNER = decode({69, 7, 219, 187, 136, 66, 4, 193, 214, 128})
+S.STROKE = decode({84, 22, 115, 174, 15, 184, 119, 71, 227, 176})
+S.GRADIENT = decode({8, 204, 222, 181, 151, 71, 30, 232, 146, 164, 106, 120})
+S.SCALE = decode({69, 134, 219, 187, 152, 78, 23, 191, 214})
+S.LAYOUT = decode({90, 184, 225, 152, 109, 25, 184, 241, 132, 201, 2, 164, 252, 47})
+S.GROUP = decode({9, 105, 177, 103, 57, 253, 219, 114, 188, 68, 133, 192, 69})
+S.ATTACH = decode({49, 9, 219, 164, 103, 60, 1, 175, 202, 125, 172, 231})
+S.LINVEL = decode({70, 170, 182, 100, 55, 17, 178, 219, 90, 177, 249, 144, 254, 22, 89, 217})
+S.ALIGNORI = decode({15, 119, 122, 34, 79, 150, 35, 100, 179, 0, 87, 172, 1, 59, 214, 160, 101, 6})
+S.CANCOLLIDE = decode({39, 206, 34, 122, 147, 6, 77, 150, 213, 31, 178, 144})
+S.PLATFORMSTAND = decode({21, 63, 149, 199, 23, 118, 183, 253, 160, 96, 5, 224, 142, 105, 66})
+S.VECTORVELOCITY = decode({23, 194, 248, 81, 166, 0, 113, 69, 236, 187, 135, 86, 41, 216, 251, 153})
+S.ATTACHMENT0 = decode({17, 57, 83, 111, 249, 122, 142, 235, 75, 141, 215, 60, 6})
+S.MAXFORCE = decode({15, 21, 134, 21, 62, 181, 34, 127, 162, 252})
+S.MAXTORQUE = decode({31, 166, 86, 20, 194, 75, 164, 68, 115, 192, 88})
+S.MAXANGULARVEL = decode({13, 63, 207, 88, 135, 9, 92, 170, 32, 149, 180, 253, 92, 181, 253, 77, 225, 180, 114, 35})
+S.RESPONSIVENESS = decode({28, 231, 243, 237, 151, 89, 36, 242, 144, 188, 102, 157, 231, 118, 218, 12})
+S.RIGIDITY = decode({31, 240, 93, 12, 221, 136, 155, 89, 110, 188, 120, 191, 220, 53, 154, 221, 45})
+S.CFRAME = decode({42, 46, 232, 6, 126, 194, 5, 149})
+S.AUTOROTATE = decode({0, 8, 40, 102, 165, 27, 74, 164, 10, 133, 77, 41})
+S.GETCONTROLS = decode({76, 116, 45, 117, 181, 104, 182, 217, 29, 150, 221, 27, 127})
+S.GETMOVEVECTOR = decode({32, 42, 36, 213, 97, 184, 85, 98, 198, 93, 188, 212, 29, 147, 226})
+S.CHARACTERADDED = decode({21, 95, 134, 195, 23, 116, 184, 1, 154, 104, 36, 235, 147, 115, 67, 223})
+S.CHARACTERREMOVING = decode({7, 212, 33, 19, 231, 142, 62, 38, 226, 144, 189, 56, 147, 220, 114, 203, 248, 85, 169})
+S.DESCENDANTADDED = decode({0, 203, 35, 86, 164, 15, 91, 165, 250, 133, 83, 24, 225, 137, 105, 57, 213})
+S.HEARTBEAT = decode({74, 144, 113, 164, 91, 122, 201, 93, 208, 230, 49})
+S.STEPPED = decode({48, 213, 8, 240, 157, 109, 53, 17, 173})
+S.DIED = decode({84, 118, 100, 206, 33, 168})
+S.CAPTUREFOCUS = decode({43, 212, 249, 97, 201, 20, 155, 89, 51, 242, 156, 118, 51, 214})
+S.FOCUSLOST = decode({27, 162, 48, 34, 249, 163, 100, 79, 253, 154, 211})
+S.GETFOCUSEDTEXTBOX = decode({42, 183, 236, 37, 128, 161, 7, 155, 98, 47, 217, 157, 141, 77, 229, 25, 162, 243, 41})
+S.ISKEYDOWN = decode({22, 125, 218, 31, 65, 170, 253, 96, 84, 23, 192})
+S.WAITFORCHILD = decode({23, 160, 249, 77, 156, 0, 88, 74, 16, 217, 131, 92, 38, 203})
+S.FINDIRSTCHILD = decode({94, 109, 123, 188, 126, 156, 15, 122, 217, 12, 69, 143, 0, 70, 146, 32})
+S.SETCLIPBOARD = decode({19, 252, 222, 98, 133, 210, 54, 125, 221, 22, 153, 128, 56, 228})
+S.TOCLIPBOARD = decode({43, 147, 42, 111, 186, 252, 135, 91, 52, 201, 142, 101, 66})
+S.ENUM_KEYCODE = decode({47, 164, 65, 64, 247, 197, 116, 75, 27})
+S.ENUM_UIT = decode({64, 81, 95, 212, 13, 170, 78, 50, 230, 172, 109, 92, 230, 21, 195})
+S.ENUM_UIS = decode({63, 176, 31, 135, 200, 38, 123, 113, 58, 243, 183, 154, 70, 248, 35, 205})
+S.ENUM_EASE = decode({11, 104, 58, 0, 181, 116, 145, 67, 125, 171, 56, 169, 196})
+S.ENUM_EASEDIR = decode({40, 248, 76, 130, 204, 61, 142, 212, 2, 165, 119, 81, 235, 193, 142, 87, 7})
+S.ENUM_ZIDX = decode({44, 130, 82, 134, 244, 128, 94, 20, 228, 136, 101, 53, 199, 248, 185, 202})
+S.ENUM_VCM = decode({52, 249, 39, 233, 141, 174, 93, 149, 201, 86, 182, 236, 75, 171, 248, 77, 129, 9, 223, 164, 105, 30, 245, 197})
+S.ENUM_ACT = decode({38, 66, 174, 12, 111, 162, 238, 92, 161, 253, 36, 189, 145, 105, 18, 200, 147, 117, 225, 58})
+S.ENUM_ALIGN = decode({88, 176, 52, 26, 185, 136, 95, 40, 218, 5, 179, 223, 35, 206, 23, 62, 148, 246, 63, 134, 208, 108, 18, 251, 162, 100})
+S.ENUM_HSTATE = decode({85, 216, 165, 39, 151, 128, 60, 221, 170, 135, 97, 227, 14, 190, 247, 87, 196, 49, 80})
+S.ENUM_FILLDIR = decode({49, 40, 212, 135, 95, 47, 38, 176, 209, 125, 169, 231, 132, 232, 11})
+S.ENUM_SORTORDER = decode({45, 164, 150, 233, 140, 67, 245, 202, 127, 96, 24})
+S.INVITE = decode({75, 136, 159, 70, 110, 195, 66, 243, 162, 130, 146, 225, 66, 121, 253, 209, 170, 2, 12, 234, 241, 97, 161, 3, 150, 178, 226, 212, 144, 36})
+S.GUINAME = decode({33, 103, 229, 93, 180, 65, 90, 192, 98, 162, 208})
 
+
+--------------------------------------------------------------------
+-- 1) Servisler
+--------------------------------------------------------------------
+local Players = game:GetService(S.PLAYERS)
+local UIS = game:GetService(S.UIS)
+local RunService = game:GetService(S.RUN)
+local TweenService = game:GetService(S.TWEEN)
+
+local Player = Players[S.LOCALPLAYER]
+local PlayerGui = Player:WaitForChild(S.PLAYERGUI)
+
+local KeyCode = Enum[S.ENUM_KEYCODE]
+local UserInputType = Enum[S.ENUM_UIT]
+local UserInputState = Enum[S.ENUM_UIS]
+local Ease = Enum[S.ENUM_EASE]
+local EaseDir = Enum[S.ENUM_EASEDIR]
+
+local MOBILE = UIS.TouchEnabled and not UIS.KeyboardEnabled
+
+--------------------------------------------------------------------
+-- 2) Ayarlar / durum
+--------------------------------------------------------------------
 local CONFIG = {
 	Speed = 65,
 	MinSpeed = 10,
@@ -84,7 +161,7 @@ local LanguageList = {"TR", "EN", "DE", "FR", "ES"}
 local Languages = {
 	TR = {
 		title = "CR-SETA",
-		subtitle = "OYUN KONTROL MERKEZİ",
+		subtitle = "MULTI TOOL · OYUN KONTROL MERKEZİ",
 		fly = "Uçuş Sistemi",
 		clip = "NoClip Sistemi",
 		speed = "Uçuş Hızı",
@@ -92,15 +169,17 @@ local Languages = {
 		on = "AÇIK",
 		off = "KAPALI",
 		discord = "Discord Sunucusu",
+		copy = "KOPYALA",
 		copied = "Davet kopyalandı!",
-		manual = "Metni seçip kopyalayın",
-		failed = "Davet kullanılamıyor",
-		info = "WASD: Hareket | Space: Yüksel | Ctrl: Alçal | Insert: Gizle | Alt: Fare",
-		infoTouch = "Joystick: Hareket | ▲ ▼: Yüksel / Alçal",
+		manual = "Metni seçip kopyalayın (Ctrl+C)",
+		info = "WASD: Hareket | Space: Yüksel | Ctrl: Alçal",
+		infoTouch = "Joystick: Hareket | ▲▼: Yüksel / Alçal",
+		open = "CR-SETA'yı aç",
+		waitChar = "Karakter bekleniyor...",
 	},
 	EN = {
 		title = "CR-SETA",
-		subtitle = "GAME CONTROL CENTER",
+		subtitle = "MULTI TOOL · GAME CONTROL CENTER",
 		fly = "Fly System",
 		clip = "NoClip System",
 		speed = "Flight Speed",
@@ -108,31 +187,35 @@ local Languages = {
 		on = "ON",
 		off = "OFF",
 		discord = "Discord Server",
+		copy = "COPY",
 		copied = "Invite copied!",
-		manual = "Select the text and copy it",
-		failed = "Invite unavailable",
-		info = "WASD: Move | Space: Up | Ctrl: Down | Insert: Hide | Alt: Mouse",
-		infoTouch = "Joystick: Move | ▲ ▼: Up / Down",
+		manual = "Select the text and copy it (Ctrl+C)",
+		info = "WASD: Move | Space: Up | Ctrl: Down",
+		infoTouch = "Joystick: Move | ▲▼: Up / Down",
+		open = "Open CR-SETA",
+		waitChar = "Waiting for character...",
 	},
 	DE = {
 		title = "CR-SETA",
-		subtitle = "SPIELSTEUERUNG",
+		subtitle = "MULTI TOOL · SPIELSTEUERUNG",
 		fly = "Flugsystem",
-		clip = "NoClip System",
+		clip = "NoClip-System",
 		speed = "Fluggeschwindigkeit",
 		language = "Sprache",
 		on = "AN",
 		off = "AUS",
 		discord = "Discord-Server",
+		copy = "KOPIEREN",
 		copied = "Einladung kopiert!",
-		manual = "Text markieren und kopieren",
-		failed = "Einladung nicht verfügbar",
-		info = "WASD: Bewegen | Space: Hoch | Ctrl: Runter | Insert: Ausblenden | Alt: Maus",
-		infoTouch = "Joystick: Bewegen | ▲ ▼: Hoch / Runter",
+		manual = "Text markieren und kopieren (Strg+C)",
+		info = "WASD: Bewegen | Leertaste: Hoch | Strg: Runter",
+		infoTouch = "Joystick: Bewegen | ▲▼: Hoch / Runter",
+		open = "CR-SETA öffnen",
+		waitChar = "Warte auf Charakter...",
 	},
 	FR = {
 		title = "CR-SETA",
-		subtitle = "CENTRE DE CONTRÔLE",
+		subtitle = "MULTI TOOL · CENTRE DE CONTRÔLE",
 		fly = "Vol",
 		clip = "NoClip",
 		speed = "Vitesse de vol",
@@ -140,76 +223,77 @@ local Languages = {
 		on = "ACTIF",
 		off = "INACTIF",
 		discord = "Serveur Discord",
+		copy = "COPIER",
 		copied = "Invitation copiée !",
-		manual = "Sélectionnez et copiez le texte",
-		failed = "Invitation indisponible",
-		info = "WASD: Bouger | Space: Monter | Ctrl: Descendre | Insert: Cacher | Alt: Souris",
-		infoTouch = "Joystick: Bouger | ▲ ▼: Monter / Descendre",
+		manual = "Sélectionnez et copiez le texte (Ctrl+C)",
+		info = "WASD: Bouger | Espace: Monter | Ctrl: Descendre",
+		infoTouch = "Joystick: Bouger | ▲▼: Monter / Descendre",
+		open = "Ouvrir CR-SETA",
+		waitChar = "En attente du personnage...",
 	},
 	ES = {
 		title = "CR-SETA",
-		subtitle = "CENTRO DE CONTROL",
+		subtitle = "MULTI TOOL · CENTRO DE CONTROL",
 		fly = "Vuelo",
 		clip = "NoClip",
-		speed = "Velocidad",
+		speed = "Velocidad de vuelo",
 		language = "Idioma",
 		on = "ACTIVO",
 		off = "INACTIVO",
 		discord = "Servidor de Discord",
+		copy = "COPIAR",
 		copied = "¡Invitación copiada!",
-		manual = "Selecciona el texto y cópialo",
-		failed = "Invitación no disponible",
-		info = "WASD: Mover | Space: Subir | Ctrl: Bajar | Insert: Ocultar | Alt: Ratón",
-		infoTouch = "Joystick: Mover | ▲ ▼: Subir / Bajar",
+		manual = "Selecciona el texto y cópialo (Ctrl+C)",
+		info = "WASD: Mover | Espacio: Subir | Ctrl: Bajar",
+		infoTouch = "Joystick: Mover | ▲▼: Subir / Bajar",
+		open = "Abrir CR-SETA",
+		waitChar = "Esperando personaje...",
 	},
 }
 
 local function tr(key)
-	return Languages[State.Language][key] or key
+	local pack = Languages[State.Language]
+	return pack[key] or Languages.TR[key] or key
 end
 
-local Colors = {
-	Background = Color3.fromRGB(13, 18, 30),
-	Panel = Color3.fromRGB(23, 32, 49),
-	Button = Color3.fromRGB(31, 45, 67),
-	Accent = Color3.fromRGB(0, 160, 255),
-	AccentLight = Color3.fromRGB(120, 220, 255),
-	Text = Color3.fromRGB(240, 245, 255),
-	Muted = Color3.fromRGB(145, 165, 190),
-	Green = Color3.fromRGB(35, 190, 120),
-	Red = Color3.fromRGB(230, 70, 85),
-	Discord = Color3.fromRGB(88, 101, 242),
+local COLORS = {
+	bgTop = Color3.fromRGB(18, 25, 40),
+	bgBottom = Color3.fromRGB(9, 13, 22),
+	panel = Color3.fromRGB(21, 29, 45),
+	button = Color3.fromRGB(29, 40, 60),
+	buttonHover = Color3.fromRGB(42, 57, 84),
+	accent = Color3.fromRGB(0, 160, 255),
+	accent2 = Color3.fromRGB(124, 92, 255),
+	text = Color3.fromRGB(238, 244, 255),
+	muted = Color3.fromRGB(140, 158, 184),
+	green = Color3.fromRGB(35, 200, 130),
+	red = Color3.fromRGB(235, 80, 90),
+	discord = Color3.fromRGB(88, 101, 242),
+	discordHover = Color3.fromRGB(108, 120, 248),
 }
 
-----------------------------------------------------------------------
--- Genel durum / bağlantı yönetimi
-----------------------------------------------------------------------
-
+--------------------------------------------------------------------
+-- 3) Karakter mantığı (Fly / NoClip)
+--------------------------------------------------------------------
 local Character, Humanoid, Root
-local FlyConn, ClipConn, ClipAddConn, DiedConn
+local FlyConn, ClipConn, ClipAddConn
 local FlyParts = {}
 local ClipParts = {}
 local Hold = {}
 local Controls
 local Refresh
-local Conns = {}
-local Closed = false
-
-local function bind(signal, callback)
-	local conn = signal:Connect(callback)
-	table.insert(Conns, conn)
-	return conn
-end
+local AutoRotateBackup = true
+local moveSign = nil
 
 task.spawn(function()
 	local ok, module = pcall(function()
-		return require(Player:WaitForChild("PlayerScripts"):WaitForChild("PlayerModule", 10))
+		return require(Player:WaitForChild(S.PLAYERSCRIPTS, 10):WaitForChild(S.PLAYERMODULE, 10))
 	end)
 	if ok and module then
 		local ok2, controls = pcall(function()
-			return module:GetControls()
+			return module[S.GETCONTROLS](module)
 		end)
-		if ok2 then
+		if ok2 and controls then
 			Controls = controls
 		end
 	end
@@ -217,16 +301,12 @@ end)
 
 local function new(class, props, parent)
 	local object = Instance.new(class)
-	for key, value in pairs(props) do
+	for key, value in pairs(props or {}) do
 		object[key] = value
 	end
 	object.Parent = parent
 	return object
 end
-
-----------------------------------------------------------------------
--- Uçuş
-----------------------------------------------------------------------
 
 local function stopFly()
 	State.Fly = false
@@ -237,35 +317,40 @@ local function stopFly()
 	end
 
 	for _, object in pairs(FlyParts) do
-		object:Destroy()
+		if object and object.Parent then
+			object:Destroy()
+		end
 	end
 	FlyParts = {}
 	table.clear(Hold)
 
 	if Humanoid and Humanoid.Parent then
-		Humanoid.PlatformStand = false
+		Humanoid[S.PLATFORMSTAND] = false
+		Humanoid[S.AUTOROTATE] = AutoRotateBackup
 		if Humanoid.Health > 0 then
-			Humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+			pcall(function()
+				Humanoid:ChangeState(Enum[S.ENUM_HSTATE].GettingUp)
+			end)
 		end
 	end
 end
 
 local function startFly()
-	if State.Fly or not Root or not Root.Parent or not Humanoid or Humanoid.Health <= 0 then
-		return
+	if State.Fly or not Root or not Humanoid or Humanoid.Health <= 0 then
+		return false
 	end
 	State.Fly = true
 
-	local attachment = new(AT, {}, Root)
-	local linear = new(LV, {
+	local attachment = new(S.ATTACH, {}, Root)
+	local linear = new(S.LINVEL, {
 		Attachment0 = attachment,
-		VelocityConstraintMode = Enum.VelocityConstraintMode.Vector,
-		RelativeTo = Enum.ActuatorRelativeTo.World,
+		VelocityConstraintMode = Enum[S.ENUM_VCM].Vector,
+		RelativeTo = Enum[S.ENUM_ACT].World,
 		MaxForce = 1e7,
+		VectorVelocity = Vector3.zero,
 	}, Root)
-	linear[VV] = Vector3.zero
-	local align = new(AO, {
-		Mode = Enum.OrientationAlignmentMode.OneAttachment,
+	local align = new(S.ALIGNORI, {
+		Mode = Enum[S.ENUM_ALIGN].OneAttachment,
 		Attachment0 = attachment,
 		RigidityEnabled = false,
 		MaxTorque = 1e7,
@@ -275,13 +360,18 @@ local function startFly()
 	}, Root)
 	FlyParts = {attachment, linear, align}
 
-	Humanoid.PlatformStand = true
+	AutoRotateBackup = Humanoid[S.AUTOROTATE]
+	Humanoid[S.AUTOROTATE] = false
+	Humanoid[S.PLATFORMSTAND] = true
+
 	local velocity = Vector3.zero
 
-	FlyConn = RunService.Heartbeat:Connect(function(dt)
-		if not Root or not Root.Parent then
+	FlyConn = RunService[S.HEARTBEAT]:Connect(function(dt)
+		if not Root or not Root.Parent or not Humanoid or Humanoid.Health <= 0 then
 			stopFly()
-			Refresh()
+			if Refresh then
+				Refresh()
+			end
 			return
 		end
 
@@ -289,60 +379,80 @@ local function startFly()
 		if not camera then
 			return
 		end
-		local cf = camera.CFrame
-		local typing = UIS:GetFocusedTextBox() ~= nil
 
-		local move = Vector3.zero
-		if typing then
-			move = Vector3.zero
-		elseif Controls then
-			move = Controls:GetMoveVector()
-		else
-			move = Vector3.new(
-				(UIS:IsKeyDown(Enum.KeyCode.D) and 1 or 0) - (UIS:IsKeyDown(Enum.KeyCode.A) and 1 or 0),
+		local cf = camera.CFrame
+		local typing = UIS[S.GETFOCUSEDTEXTBOX](UIS) ~= nil
+
+		-- ham klavye vektörü (referans)
+		local raw = Vector3.zero
+		if not typing then
+			raw = Vector3.new(
+				(UIS:IsKeyDown(KeyCode.D) and 1 or 0) - (UIS:IsKeyDown(KeyCode.A) and 1 or 0),
 				0,
-				(UIS:IsKeyDown(Enum.KeyCode.S) and 1 or 0) - (UIS:IsKeyDown(Enum.KeyCode.W) and 1 or 0)
+				(UIS:IsKeyDown(KeyCode.S) and 1 or 0) - (UIS:IsKeyDown(KeyCode.W) and 1 or 0)
 			)
+		end
+
+		-- hareket vektörü
+		local mv = raw
+		if Controls then
+			local ok, v = pcall(function()
+				return Controls[S.GETMOVEVECTOR](Controls)
+			end)
+			if ok and v then
+				mv = Vector3.new(v.X, 0, v.Y)
+				-- işaret kalibrasyonu (W/S yönü ters ise düzelt)
+				if moveSign == nil then
+					if raw.Z ~= 0 and mv.Z ~= 0 then
+						moveSign = (raw.Z > 0) == (mv.Z > 0) and 1 or -1
+					end
+				end
+				if moveSign then
+					mv = Vector3.new(mv.X, 0, mv.Z * moveSign)
+				end
+			end
 		end
 
 		local vertical = 0
 		if Hold.Up then
-			vertical += 1
+			vertical = vertical + 1
 		end
 		if Hold.Down then
-			vertical -= 1
+			vertical = vertical - 1
 		end
 		if not typing then
-			if UIS:IsKeyDown(Enum.KeyCode.Space) then
-				vertical += 1
+			if UIS:IsKeyDown(KeyCode.Space) then
+				vertical = vertical + 1
 			end
-			if UIS:IsKeyDown(Enum.KeyCode.LeftControl) or UIS:IsKeyDown(Enum.KeyCode.RightControl) then
-				vertical -= 1
+			if UIS:IsKeyDown(KeyCode.LeftControl) or UIS:IsKeyDown(KeyCode.RightControl) then
+				vertical = vertical - 1
 			end
 		end
 
-		local direction = cf.RightVector * move.X - cf.LookVector * move.Z + Vector3.yAxis * math.clamp(vertical, -1, 1)
+		-- yatay bakış yönü (kamera eğiminden bağımsız)
+		local flat = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
+		if flat.Magnitude < 0.01 then
+			flat = Vector3.new(0, 0, -1)
+		else
+			flat = flat.Unit
+		end
+
+		local direction = flat * (-mv.Z) + cf.RightVector * mv.X + Vector3.yAxis * math.clamp(vertical, -1, 1)
 		if direction.Magnitude > 1 then
 			direction = direction.Unit
 		end
 
-		velocity = velocity:Lerp(direction * CONFIG.Speed, math.min(1, dt * 10))
-		linear[VV] = velocity
-
-		local flat = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
-		if flat.Magnitude > 0.01 then
-			align.CFrame = CFrame.lookAt(Vector3.zero, flat)
-		end
+		velocity = velocity:Lerp(direction * CONFIG.Speed, math.min(1, dt * 12))
+		linear[S.VECTORVELOCITY] = velocity
+		align[S.CFRAME] = CFrame.lookAt(Vector3.zero, flat)
 	end)
+
+	return true
 end
 
-----------------------------------------------------------------------
--- NoClip
-----------------------------------------------------------------------
-
 local function trackPart(part)
-	if part:IsA("BasePart") and ClipParts[part] == nil then
-		ClipParts[part] = part[CC]
+	if part:IsA(S.BASEPART) and ClipParts[part] == nil then
+		ClipParts[part] = part[S.CANCOLLIDE]
 	end
 end
 
@@ -360,7 +470,7 @@ local function stopClip()
 
 	for part, original in pairs(ClipParts) do
 		if part.Parent then
-			part[CC] = original
+			part[S.CANCOLLIDE] = original
 		end
 	end
 	ClipParts = {}
@@ -368,78 +478,86 @@ end
 
 local function startClip()
 	if State.NoClip or not Character then
-		return
+		return false
 	end
 	State.NoClip = true
 
 	for _, descendant in ipairs(Character:GetDescendants()) do
 		trackPart(descendant)
 	end
-	ClipAddConn = Character.DescendantAdded:Connect(trackPart)
+	ClipAddConn = Character[S.DESCENDANTADDED]:Connect(trackPart)
 
-	ClipConn = RunService.Stepped:Connect(function()
+	ClipConn = RunService[S.STEPPED]:Connect(function()
 		for part in pairs(ClipParts) do
 			if part.Parent then
-				part[CC] = false
+				part[S.CANCOLLIDE] = false
 			else
 				ClipParts[part] = nil
 			end
 		end
 	end)
+
+	return true
 end
 
-----------------------------------------------------------------------
--- UI yardımcıları
-----------------------------------------------------------------------
-
+--------------------------------------------------------------------
+-- 4) Arayüz yardımcıları
+--------------------------------------------------------------------
 local function tween(object, duration, props, style, direction)
-	local t = TweenService:Create(
-		object,
-		TweenInfo.new(duration, style or Enum.EasingStyle.Quad, direction or Enum.EasingDirection.Out),
-		props
-	)
+	local info = TweenInfo.new(duration, style or Ease.Quad, direction or EaseDir.Out)
+	local t = TweenService:Create(object, info, props)
 	t:Play()
 	return t
 end
 
 local function corner(object, radius)
-	return new("UICorner", {CornerRadius = UDim.new(0, radius)}, object)
+	return new(S.CORNER, {CornerRadius = UDim.new(0, radius)}, object)
+end
+
+local function stroke(object, color, thickness, transparency)
+	return new(S.STROKE, {
+		Color = color,
+		Thickness = thickness or 1,
+		Transparency = transparency or 0,
+	}, object)
 end
 
 local function isPointer(input)
-	return input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch
+	return input.UserInputType == UserInputType.MouseButton1 or input.UserInputType == UserInputType.Touch
 end
 
--- Hover parlaması + basma animasyonu
-local function fx(button, radius)
-	local glow = new("Frame", {
-		Name = "Glow",
-		Size = UDim2.fromScale(1, 1),
-		BackgroundColor3 = Colors.Text,
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		ZIndex = 0,
-		Active = false,
-	}, button)
-	corner(glow, radius)
-	local scale = new("UIScale", {}, button)
+-- hover + basma animasyonu (metni kapatmayan temiz yöntem)
+local function fx(button, radius, hoverColor)
+	local baseColor = button.BackgroundColor3
+	local hasStroke = button:FindFirstChildOfClass(S.STROKE)
+	local scale = new(S.SCALE, {}, button)
 
 	button.MouseEnter:Connect(function()
-		tween(glow, 0.15, {BackgroundTransparency = 0.88})
+		if hoverColor then
+			tween(button, 0.18, {BackgroundColor3 = hoverColor})
+		end
+		if hasStroke then
+			tween(hasStroke, 0.18, {Transparency = 0.25})
+		end
 	end)
 	button.MouseLeave:Connect(function()
-		tween(glow, 0.2, {BackgroundTransparency = 1})
+		tween(button, 0.22, {BackgroundColor3 = baseColor})
+		if hasStroke then
+			tween(hasStroke, 0.22, {Transparency = 0.7})
+		end
 		tween(scale, 0.12, {Scale = 1})
 	end)
 	button.MouseButton1Down:Connect(function()
-		tween(scale, 0.08, {Scale = 0.96})
+		tween(scale, 0.08, {Scale = 0.97})
 	end)
 	button.MouseButton1Up:Connect(function()
-		tween(scale, 0.25, {Scale = 1}, Enum.EasingStyle.Back)
+		tween(scale, 0.18, {Scale = 1}, Ease.Back)
 	end)
+
+	return scale
 end
 
--- Sürükleme: global dinleyici sadece sürüklerken vardır
+-- sürükleme takibi (global dinleyici yalnızca sürükleme sırasında açık)
 local function trackDrag(handle, onBegin, onMove)
 	handle.InputBegan:Connect(function(input)
 		if not isPointer(input) then
@@ -458,293 +576,833 @@ local function trackDrag(handle, onBegin, onMove)
 			end
 		end
 
-		onBegin(input)
+		if onBegin(input) == false then
+			return
+		end
 		moveConn = UIS.InputChanged:Connect(function(changed)
-			if changed.UserInputType == Enum.UserInputType.MouseMovement or changed == input then
+			if changed.UserInputType == UserInputType.MouseMovement or changed == input then
 				onMove(changed)
 			end
 		end)
-		endConn = input.Changed:Connect(function()
-			if input.UserInputState == Enum.UserInputState.End then
+		endConn = UIS.InputEnded:Connect(function(changed)
+			if changed == input or changed.UserInputState == UserInputState.End then
 				stop()
 			end
 		end)
 	end)
 end
 
-----------------------------------------------------------------------
--- Arayüz
-----------------------------------------------------------------------
+--------------------------------------------------------------------
+-- 4b) Anahtar sistemi (GitHub listesi · her kod için ayrı 24 saat)
+--------------------------------------------------------------------
+local K = {
+	K_URL = decode({83, 218, 70, 158, 237, 56, 201, 57, 145, 177, 192, 156, 79, 80, 40, 225, 16, 92, 207, 86, 117, 200, 41, 116, 112, 21, 139, 91, 55, 139, 232, 42, 106, 26, 254, 185, 44, 49, 192, 29, 73, 164, 252, 89, 79, 223, 126, 59, 73}),
+	K_RAW = decode({243, 84, 230, 62, 141, 216, 105, 217, 49, 81, 105, 64, 249, 241, 200, 133, 154, 247, 116, 247, 20, 82, 191, 24, 94, 161, 40, 251, 215, 110, 71, 205, 225, 142, 170, 39, 121, 222, 77, 189, 247, 108, 103, 53, 4, 187, 13, 228, 176, 9, 21, 235, 167, 168, 137, 67, 101, 171, 64, 157, 132, 10, 117, 206, 38, 112, 247, 195, 139, 37, 56, 200, 155, 72, 101, 223, 65, 138, 25, 134, 117, 37, 34, 235, 190}),
+	K_HG = decode({39, 192, 45, 101, 153, 211, 37, 141, 237}),
+	K_RQ1 = decode({102, 9, 243, 97, 183, 10, 73, 231, 157}),
+	K_RQ2 = decode({167, 40, 214, 167, 114, 44, 28, 181, 147, 36, 94, 9, 37, 115}),
+	K_WF = decode({13, 203, 165, 73, 118, 30, 87, 169, 52, 149, 176}),
+	K_RF = decode({19, 60, 223, 98, 120, 211, 48, 125, 193, 23}),
+	K_IF = decode({211, 124, 230, 182, 144, 60, 87, 9}),
+	K_GSTN = decode({138, 90, 16, 118, 211, 44, 86, 190, 14, 74, 168, 16, 250, 193, 101, 83, 0, 199}),
+	K_FILE = decode({25, 4, 146, 234, 121, 64, 250, 163, 164, 70, 27, 180, 228, 92, 186, 16, 133}),
+	K_SALT = decode({94, 249, 160, 199, 59, 143, 238, 103, 232, 213, 139, 126, 72, 33, 236, 110, 167, 180, 113, 124, 247}),
+	K_GENV = decode({150, 240, 239, 176, 129, 95, 254, 39, 202}),
+}
 
-local Previous = PlayerGui:FindFirstChild(GUI_NAME)
+local KEY_LIFETIME = 24 * 60 * 60 -- her kod ilk girişten itibaren 24 saat
+local KEY_RECHECK = 300 -- liste 5 dakikada bir tekrar doğrulanır
+
+local function getGlobal(name)
+	local ok, value = pcall(function()
+		return (getgenv and getgenv() or getfenv())[name]
+	end)
+	return ok and value or nil
+end
+
+local function nowTime()
+	local ok, value = pcall(function()
+		return workspace[K.K_GSTN](workspace)
+	end)
+	if ok and type(value) == "number" then
+		return value
+	end
+	return os.time()
+end
+
+local function khash(str)
+	local h1, h2 = 5381, 52711
+	for i = 1, #str do
+		local b = str:byte(i)
+		h1 = (h1 * 33 + b) % 4294967296
+		h2 = (h2 * 131 + b * i) % 4294967291
+	end
+	return string.format("%08x%08x", h1, h2)
+end
+
+local function mac(...)
+	return khash(table.concat({...}, "|") .. K.K_SALT)
+end
+
+local function normalizeKey(text)
+	return ((tostring(text or ""):gsub("%s+", "")):upper())
+end
+
+local function httpGet(url)
+	for _, name in ipairs({K.K_RQ1, K.K_RQ2}) do
+		local fn = getGlobal(name)
+		if type(fn) == "function" then
+			local ok, res = pcall(fn, {Url = url, Method = "GET"})
+			if ok and type(res) == "table" and type(res.Body) == "string"
+				and (res.StatusCode == 200 or res.Success) then
+				return res.Body
+			end
+		end
+	end
+	local ok, res = pcall(function()
+		return game[K.K_HG](game, url, true)
+	end)
+	if ok and type(res) == "string" and #res > 0 then
+		return res
+	end
+	return nil
+end
+
+local function fetchKeys()
+	local body = httpGet(K.K_RAW .. "?t=" .. tostring(math.floor(nowTime())))
+	if not body then
+		return nil
+	end
+	local keys = {}
+	for line in body:gmatch("[^\r\n]+") do
+		local code = normalizeKey(line)
+		if code ~= "" and code:sub(1, 1) ~= "#" then
+			keys[code] = true
+		end
+	end
+	return keys
+end
+
+-- Yerel kayıt: her kodun ilk kullanım zamanı (MAC ile korunur)
+local MemoryStore = {}
+
+local function loadStore()
+	local store = {started = {}, last = nil}
+	local raw = MemoryStore.raw
+	local isfile, readfile = getGlobal(K.K_IF), getGlobal(K.K_RF)
+	if type(isfile) == "function" and type(readfile) == "function" then
+		local ok, data = pcall(function()
+			if isfile(K.K_FILE) then
+				return readfile(K.K_FILE)
+			end
+		end)
+		if ok and type(data) == "string" then
+			raw = data
+		end
+	end
+	for line in tostring(raw or ""):gmatch("[^\r\n]+") do
+		local kind, a, b, c = line:match("^(%a)|([^|]*)|([^|]*)|?([^|]*)$")
+		if kind == "K" and mac("K", a, b) == c then
+			store.started[a] = tonumber(b)
+		elseif kind == "L" and mac("L", a) == b then
+			store.last = a
+		end
+	end
+	return store
+end
+
+local function saveStore(store)
+	local lines = {}
+	for id, started in pairs(store.started) do
+		table.insert(lines, string.format("K|%s|%s|%s", id, tostring(started), mac("K", id, tostring(started))))
+	end
+	if store.last then
+		table.insert(lines, string.format("L|%s|%s", store.last, mac("L", store.last)))
+	end
+	local data = table.concat(lines, "\n")
+	MemoryStore.raw = data
+	local writefile = getGlobal(K.K_WF)
+	if type(writefile) == "function" then
+		pcall(writefile, K.K_FILE, data)
+	end
+end
+
+-- Doğrulama: ok, bitişZamanı | false, hata ("empty" / "net" / "invalid" / "expired")
+local function verifyKey(input, keysOverride)
+	local code = normalizeKey(input)
+	if code == "" then
+		return false, "empty"
+	end
+	local keys = keysOverride or fetchKeys()
+	if not keys then
+		return false, "net"
+	end
+	if not keys[code] then
+		return false, "invalid"
+	end
+
+	local store = loadStore()
+	local id = khash(code)
+	local t = nowTime()
+	local started = store.started[id]
+	if not started then
+		started = t
+		store.started[id] = started
+	end
+	if t >= started + KEY_LIFETIME then
+		return false, "expired"
+	end
+	store.last = code
+	saveStore(store)
+	return true, started + KEY_LIFETIME, code
+end
+
+local function formatRemaining(seconds)
+	seconds = math.max(0, math.floor(seconds))
+	local h = math.floor(seconds / 3600)
+	local m = math.floor((seconds % 3600) / 60)
+	if State.Language == "TR" then
+		return string.format("%d sa %d dk", h, m)
+	end
+	return string.format("%dh %dm", h, m)
+end
+
+local KeyText = {
+	TR = {
+		title = "CR-SETA · Giriş", sub = "Devam etmek için anahtar gerekli",
+		placeholder = "Anahtarı yapıştır (örn. 123-456-789-0000)",
+		enter = "GİRİŞ", get = "GET KEY", checking = "Kontrol ediliyor...",
+		empty = "Lütfen bir anahtar yazın.", net = "Anahtar listesine ulaşılamadı. İnterneti kontrol edin.",
+		invalid = "Geçersiz anahtar.", expired = "Bu anahtarın 24 saatlik süresi doldu.",
+		ok = "Doğrulandı · kalan süre: ", copied = "Link kopyalandı! Tarayıcıda açıp anahtarı alın.",
+		manual = "Linki seçip kopyalayın (Ctrl+C)", wait = "Çok fazla deneme. Bekleyin: ",
+		ended = "Anahtar süresi doldu veya listeden kaldırıldı.",
+	},
+	EN = {
+		title = "CR-SETA · Login", sub = "A key is required to continue",
+		placeholder = "Paste your key (e.g. 123-456-789-0000)",
+		enter = "LOGIN", get = "GET KEY", checking = "Checking...",
+		empty = "Please enter a key.", net = "Could not reach the key list. Check your connection.",
+		invalid = "Invalid key.", expired = "This key's 24 hour period has expired.",
+		ok = "Verified · time left: ", copied = "Link copied! Open it in your browser to get a key.",
+		manual = "Select the link and copy it (Ctrl+C)", wait = "Too many tries. Wait: ",
+		ended = "Your key expired or was removed from the list.",
+	},
+}
+
+local function kt(key)
+	local pack = KeyText[State.Language] or KeyText.EN
+	return pack[key] or KeyText.EN[key] or key
+end
+
+local function copyText(text)
+	local fn = getGlobal(S.SETCLIPBOARD) or getGlobal(S.TOCLIPBOARD)
+	return type(fn) == "function" and pcall(fn, text)
+end
+
+local function keyToast(text, color)
+	local old = PlayerGui:FindFirstChild("crseta_toast")
+	if old then
+		old:Destroy()
+	end
+	local holder = new("ScreenGui", {Name = "crseta_toast", ResetOnSpawn = false, DisplayOrder = 120}, PlayerGui)
+	local label = new("TextLabel", {
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.5, 0, 1, 40),
+		Size = UDim2.fromOffset(300, 38),
+		BackgroundColor3 = COLORS.panel,
+		Font = Enum.Font.GothamSemibold,
+		Text = text,
+		TextSize = 13,
+		TextColor3 = color or COLORS.text,
+	}, holder)
+	corner(label, 10)
+	stroke(label, color or COLORS.accent, 1.5, 0.2)
+	tween(label, 0.35, {Position = UDim2.new(0.5, 0, 1, -28)}, Ease.Back)
+	task.delay(3.2, function()
+		if label.Parent then
+			tween(label, 0.3, {Position = UDim2.new(0.5, 0, 1, 60)}, Ease.Quad, EaseDir.In)
+			task.wait(0.35)
+			holder:Destroy()
+		end
+	end)
+end
+
+-- Kapı: geçerli anahtar girilene kadar bekler, bitiş zamanını döndürür
+local function runKeyGate(message)
+	local ui = new("ScreenGui", {Name = "crseta_key", ResetOnSpawn = false, DisplayOrder = 100}, PlayerGui)
+	-- Modal: Shift Lock / oyun fare kilidi açıkken bile fare serbest kalır
+	new("TextButton", {Size = UDim2.fromOffset(1, 1), BackgroundTransparency = 1, Text = "", Modal = true}, ui)
+
+	local card = new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(0.5, 0, 0.5, 20),
+		Size = UDim2.fromOffset(360, 262),
+		BackgroundColor3 = COLORS.bgTop,
+		BorderSizePixel = 0,
+	}, ui)
+	corner(card, 18)
+	local cardStroke = stroke(card, COLORS.accent, 1.8, 0.1)
+	local cardGradient = new("UIGradient", {
+		Color = ColorSequence.new({
+			ColorSequenceKeypoint.new(0, COLORS.accent),
+			ColorSequenceKeypoint.new(0.5, COLORS.accent2),
+			ColorSequenceKeypoint.new(1, COLORS.accent),
+		}),
+	}, cardStroke)
+	TweenService:Create(cardGradient, TweenInfo.new(4, Ease.Linear, EaseDir.In, -1), {Rotation = 360}):Play()
+	local cardScale = new("UIScale", {Scale = 0.85}, card)
+
+	local title = new("TextLabel", {
+		Position = UDim2.fromOffset(20, 16), Size = UDim2.new(1, -40, 0, 26),
+		BackgroundTransparency = 1, Font = Enum.Font.GothamBold, TextSize = 21,
+		TextColor3 = COLORS.text, TextXAlignment = Enum.TextXAlignment.Left,
+	}, card)
+	local sub = new("TextLabel", {
+		Position = UDim2.fromOffset(20, 44), Size = UDim2.new(1, -40, 0, 16),
+		BackgroundTransparency = 1, Font = Enum.Font.Gotham, TextSize = 12,
+		TextColor3 = COLORS.muted, TextXAlignment = Enum.TextXAlignment.Left,
+	}, card)
+
+	local box = new("TextBox", {
+		Position = UDim2.fromOffset(20, 76), Size = UDim2.new(1, -40, 0, 44),
+		BackgroundColor3 = COLORS.panel, Font = Enum.Font.GothamSemibold, TextSize = 15,
+		TextColor3 = COLORS.text, PlaceholderColor3 = COLORS.muted, Text = "",
+		ClearTextOnFocus = false,
+	}, card)
+	corner(box, 11)
+	local boxStroke = stroke(box, COLORS.button, 1.4, 0)
+
+	local enterBtn = new("TextButton", {
+		Position = UDim2.fromOffset(20, 134), Size = UDim2.new(0.5, -26, 0, 42),
+		BackgroundColor3 = COLORS.accent, AutoButtonColor = false,
+		Font = Enum.Font.GothamBold, TextSize = 14, TextColor3 = COLORS.text,
+	}, card)
+	corner(enterBtn, 11)
+	fx(enterBtn, 11, Color3.fromRGB(40, 185, 255))
+
+	local getBtn = new("TextButton", {
+		AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -20, 0, 134),
+		Size = UDim2.new(0.5, -26, 0, 42), BackgroundColor3 = COLORS.discord,
+		AutoButtonColor = false, Font = Enum.Font.GothamBold, TextSize = 14, TextColor3 = COLORS.text,
+	}, card)
+	corner(getBtn, 11)
+	fx(getBtn, 11, COLORS.discordHover)
+
+	local linkBox = new("TextBox", {
+		Position = UDim2.fromOffset(20, 186), Size = UDim2.new(1, -40, 0, 30),
+		BackgroundColor3 = COLORS.panel, Font = Enum.Font.Gotham, TextSize = 11,
+		TextColor3 = COLORS.text, Text = K.K_URL, TextEditable = false,
+		ClearTextOnFocus = false, Visible = false,
+	}, card)
+	corner(linkBox, 8)
+
+	local status = new("TextLabel", {
+		Position = UDim2.fromOffset(20, 222), Size = UDim2.new(1, -40, 0, 30),
+		BackgroundTransparency = 1, Font = Enum.Font.GothamSemibold, TextSize = 12,
+		TextColor3 = COLORS.muted, TextWrapped = true, Text = message or "",
+		TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+	}, card)
+
+	local function setStatus(text, color)
+		status.Text = text
+		status.TextColor3 = color or COLORS.muted
+	end
+	local function applyTexts()
+		title.Text, sub.Text = kt("title"), kt("sub")
+		box.PlaceholderText = kt("placeholder")
+		enterBtn.Text, getBtn.Text = kt("enter"), kt("get")
+	end
+	applyTexts()
+	if message then
+		setStatus(message, COLORS.red)
+	end
+	tween(cardScale, 0.4, {Scale = 1}, Ease.Back)
+	tween(card, 0.4, {Position = UDim2.new(0.5, 0, 0.5, 0)}, Ease.Quint)
+
+	local result = Instance.new("BindableEvent")
+	local busy, fails, lockedUntil = false, 0, 0
+
+	local function shake()
+		local base = card.Position
+		for _, dx in ipairs({-8, 8, -5, 5, 0}) do
+			tween(card, 0.05, {Position = UDim2.new(base.X.Scale, base.X.Offset + dx, base.Y.Scale, base.Y.Offset)})
+			task.wait(0.05)
+		end
+		tween(boxStroke, 0.4, {Color = COLORS.button})
+	end
+
+	local function submit()
+		if busy then
+			return
+		end
+		local t = os.clock()
+		if t < lockedUntil then
+			setStatus(kt("wait") .. math.ceil(lockedUntil - t) .. "s", COLORS.red)
+			return
+		end
+		busy = true
+		setStatus(kt("checking"), COLORS.muted)
+		local ok, a = verifyKey(box.Text)
+		if ok then
+			local remaining = a - nowTime()
+			setStatus(kt("ok") .. formatRemaining(remaining), COLORS.green)
+			tween(boxStroke, 0.2, {Color = COLORS.green})
+			task.wait(0.7)
+			tween(cardScale, 0.25, {Scale = 0.85}, Ease.Back, EaseDir.In)
+			task.wait(0.25)
+			ui:Destroy()
+			keyToast(kt("ok") .. formatRemaining(remaining), COLORS.green)
+			result:Fire(a)
+			return
+		end
+		if a ~= "net" and a ~= "empty" then
+			fails += 1
+			if fails >= 5 then
+				fails = 0
+				lockedUntil = os.clock() + 20
+			end
+		end
+		setStatus(kt(a) or a, COLORS.red)
+		tween(boxStroke, 0.15, {Color = COLORS.red})
+		shake()
+		busy = false
+	end
+
+	enterBtn.Activated:Connect(submit)
+	box.FocusLost:Connect(function(enterPressed)
+		if enterPressed then
+			submit()
+		end
+	end)
+	getBtn.Activated:Connect(function()
+		if copyText(K.K_URL) then
+			linkBox.Visible = false
+			setStatus(kt("copied"), COLORS.green)
+		else
+			linkBox.Visible = true
+			setStatus(kt("manual"), COLORS.muted)
+			pcall(function()
+				linkBox:CaptureFocus()
+			end)
+		end
+	end)
+
+	return result.Event:Wait()
+end
+
+-- Başlangıç: kayıtlı anahtar hâlâ geçerliyse sessizce giriş yapılır
+local KeyExpiry
+do
+	local store = loadStore()
+	if store.last then
+		local ok, a = verifyKey(store.last)
+		if ok then
+			KeyExpiry = a
+			keyToast(kt("ok") .. formatRemaining(a - nowTime()), COLORS.green)
+		end
+	end
+	if not KeyExpiry then
+		KeyExpiry = runKeyGate()
+	end
+end
+
+local __ok, __err = xpcall(function()
+
+--------------------------------------------------------------------
+-- 5) Arayüz kurulumu
+--------------------------------------------------------------------
+local Previous = PlayerGui[S.FINDIRSTCHILD](PlayerGui, S.GUINAME)
 if Previous then
 	Previous:Destroy()
 end
 
-local Gui = new("ScreenGui", {
-	Name = GUI_NAME,
+local Gui = new(S.GUI_CLS, {
+	Name = S.GUINAME,
 	ResetOnSpawn = false,
 	DisplayOrder = 50,
-	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+	ZIndexBehavior = Enum[S.ENUM_ZIDX].Sibling,
 }, PlayerGui)
 
-local FULL_SIZE = UDim2.fromOffset(340, 424)
-local MINI_SIZE = UDim2.fromOffset(340, 58)
+local FULL_SIZE = UDim2.fromOffset(352, 476)
+local MINI_SIZE = UDim2.fromOffset(352, 60)
 
-local Main = new("Frame", {
+local Main = new(S.FRAME, {
 	Name = "Main",
-	AnchorPoint = Vector2.new(0.5, 0),
-	Position = UDim2.new(0.5, 0, 0.5, -212),
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	Position = UDim2.new(0.5, 0, 0.5, 12),
 	Size = FULL_SIZE,
-	BackgroundColor3 = Colors.Background,
+	BackgroundColor3 = COLORS.bgTop,
 	BorderSizePixel = 0,
 	ClipsDescendants = true,
-	Active = true,
+	ZIndex = 1,
 }, Gui)
-corner(Main, 16)
-local MainScale = new("UIScale", {Scale = 0.8}, Main)
+corner(Main, 18)
 
--- Dönen gradyan çerçeve
-local Outline = new("UIStroke", {
-	Color = Color3.fromRGB(255, 255, 255),
-	Thickness = 1.8,
-	ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-}, Main)
-local OutlineGradient = new("UIGradient", {
+local BgGradient = new(S.GRADIENT, {
 	Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, Colors.AccentLight),
-		ColorSequenceKeypoint.new(0.35, Color3.fromRGB(20, 55, 130)),
-		ColorSequenceKeypoint.new(0.65, Color3.fromRGB(20, 55, 130)),
-		ColorSequenceKeypoint.new(1, Colors.AccentLight),
+		ColorSequenceKeypoint.new(0, COLORS.bgTop),
+		ColorSequenceKeypoint.new(1, COLORS.bgBottom),
+	}),
+	Rotation = 90,
+}, Main)
+
+local Outline = stroke(Main, Color3.new(1, 1, 1), 1.6, 0.55)
+local OutlineGradient = new(S.GRADIENT, {
+	Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, COLORS.accent),
+		ColorSequenceKeypoint.new(0.5, COLORS.accent2),
+		ColorSequenceKeypoint.new(1, COLORS.accent),
 	}),
 }, Outline)
-TweenService:Create(
-	OutlineGradient,
-	TweenInfo.new(5, Enum.EasingStyle.Linear, Enum.EasingDirection.In, -1),
-	{Rotation = 360}
-):Play()
+TweenService:Create(OutlineGradient, TweenInfo.new(7, Ease.Linear, EaseDir.In, -1), {Rotation = 360}):Play()
 
-local TopBar = new("Frame", {
+local MainScale = new(S.SCALE, {Scale = 0.86}, Main)
+
+-- üst bar
+local TopBar = new(S.FRAME, {
 	Name = "TopBar",
-	Size = UDim2.new(1, 0, 0, 58),
+	Size = UDim2.new(1, 0, 0, 60),
 	BackgroundTransparency = 1,
 	Active = true,
+	ZIndex = 2,
 }, Main)
 
-local Title = new("TextLabel", {
-	Position = UDim2.fromOffset(18, 8),
-	Size = UDim2.new(1, -120, 0, 28),
-	BackgroundTransparency = 1,
-	Font = Enum.Font.GothamBold,
-	TextSize = 22,
-	TextColor3 = Color3.fromRGB(255, 255, 255),
-	TextXAlignment = Enum.TextXAlignment.Left,
+local Logo = new(S.FRAME, {
+	Position = UDim2.fromOffset(14, 12),
+	Size = UDim2.fromOffset(36, 36),
+	BackgroundColor3 = COLORS.accent,
+	BorderSizePixel = 0,
+	ZIndex = 3,
 }, TopBar)
-
--- Başlıkta akan ışık animasyonu
-local TitleGradient = new("UIGradient", {
+corner(Logo, 11)
+local LogoGradient = new(S.GRADIENT, {
 	Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, Colors.Accent),
-		ColorSequenceKeypoint.new(0.5, Colors.AccentLight),
-		ColorSequenceKeypoint.new(1, Colors.Accent),
+		ColorSequenceKeypoint.new(0, COLORS.accent),
+		ColorSequenceKeypoint.new(1, COLORS.accent2),
 	}),
-	Offset = Vector2.new(-1, 0),
-}, Title)
-TweenService:Create(
-	TitleGradient,
-	TweenInfo.new(2.4, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
-	{Offset = Vector2.new(1, 0)}
-):Play()
+	Rotation = 45,
+}, Logo)
+TweenService:Create(LogoGradient, TweenInfo.new(9, Ease.Linear, EaseDir.In, -1), {Rotation = 405}):Play()
 
-local Subtitle = new("TextLabel", {
-	Position = UDim2.fromOffset(18, 36),
-	Size = UDim2.new(1, -120, 0, 14),
+local LogoText = new(S.LABEL, {
+	Size = UDim2.fromScale(1, 1),
+	BackgroundTransparency = 1,
+	Font = Enum.Font.GothamBlack,
+	Text = "CS",
+	TextSize = 15,
+	TextColor3 = Color3.new(1, 1, 1),
+	ZIndex = 4,
+}, Logo)
+
+local Title = new(S.LABEL, {
+	Position = UDim2.fromOffset(60, 9),
+	Size = UDim2.new(1, -130, 0, 26),
+	BackgroundTransparency = 1,
+	Font = Enum.Font.GothamBlack,
+	TextSize = 20,
+	TextColor3 = COLORS.accent,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	ZIndex = 3,
+}, TopBar)
+local TitleGradient = new(S.GRADIENT, {
+	Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, COLORS.accent),
+		ColorSequenceKeypoint.new(0.5, Color3.new(1, 1, 1)),
+		ColorSequenceKeypoint.new(1, COLORS.accent2),
+	}),
+}, Title)
+TweenService:Create(TitleGradient, TweenInfo.new(7, Ease.Linear, EaseDir.In, -1), {Rotation = 360}):Play()
+
+local Subtitle = new(S.LABEL, {
+	Position = UDim2.fromOffset(60, 34),
+	Size = UDim2.new(1, -130, 0, 14),
 	BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham,
 	TextSize = 10,
-	TextColor3 = Colors.Muted,
+	TextColor3 = COLORS.muted,
 	TextXAlignment = Enum.TextXAlignment.Left,
+	ZIndex = 3,
 }, TopBar)
 
-local Close = new("TextButton", {
+local Minimize = new(S.BUTTON, {
 	AnchorPoint = Vector2.new(1, 0.5),
-	Position = UDim2.new(1, -14, 0.5, 0),
-	Size = UDim2.fromOffset(34, 30),
-	BackgroundColor3 = Colors.Button,
-	AutoButtonColor = false,
-	Font = Enum.Font.GothamBold,
-	Text = "✕",
-	TextSize = 14,
-	TextColor3 = Colors.Text,
-}, TopBar)
-corner(Close, 8)
-fx(Close, 8)
-Close.MouseEnter:Connect(function()
-	tween(Close, 0.15, {BackgroundColor3 = Colors.Red})
-end)
-Close.MouseLeave:Connect(function()
-	tween(Close, 0.2, {BackgroundColor3 = Colors.Button})
-end)
-
-local Minimize = new("TextButton", {
-	AnchorPoint = Vector2.new(1, 0.5),
-	Position = UDim2.new(1, -54, 0.5, 0),
-	Size = UDim2.fromOffset(34, 30),
-	BackgroundColor3 = Colors.Button,
+	Position = UDim2.new(1, -52, 0.5, 0),
+	Size = UDim2.fromOffset(28, 26),
+	BackgroundColor3 = COLORS.button,
 	AutoButtonColor = false,
 	Font = Enum.Font.GothamBold,
 	Text = "—",
-	TextSize = 18,
-	TextColor3 = Colors.Text,
+	TextSize = 16,
+	TextColor3 = COLORS.text,
+	ZIndex = 3,
 }, TopBar)
 corner(Minimize, 8)
-fx(Minimize, 8)
+fx(Minimize, 8, COLORS.buttonHover)
 
-new("Frame", {
-	Position = UDim2.new(0, 15, 1, -1),
-	Size = UDim2.new(1, -30, 0, 1),
-	BackgroundColor3 = Colors.Panel,
+local Close = new(S.BUTTON, {
+	AnchorPoint = Vector2.new(1, 0.5),
+	Position = UDim2.new(1, -14, 0.5, 0),
+	Size = UDim2.fromOffset(28, 26),
+	BackgroundColor3 = COLORS.button,
+	AutoButtonColor = false,
+	Font = Enum.Font.GothamBold,
+	Text = "✕",
+	TextSize = 13,
+	TextColor3 = COLORS.text,
+	ZIndex = 3,
+}, TopBar)
+corner(Close, 8)
+fx(Close, 8, COLORS.red)
+
+new(S.FRAME, {
+	Position = UDim2.new(0, 16, 1, -1),
+	Size = UDim2.new(1, -32, 0, 1),
+	BackgroundColor3 = COLORS.panel,
+	BackgroundTransparency = 0.15,
 	BorderSizePixel = 0,
+	ZIndex = 3,
 }, TopBar)
 
-local Content = new("CanvasGroup", {
+local Content = new(S.GROUP, {
 	Name = "Content",
-	Position = UDim2.fromOffset(0, 58),
-	Size = UDim2.new(1, 0, 0, 366),
+	Position = UDim2.fromOffset(0, 60),
+	Size = UDim2.new(1, 0, 0, 404),
 	BackgroundTransparency = 1,
 	BorderSizePixel = 0,
+	ZIndex = 2,
 }, Main)
 
--- Toggle satırları (Uçuş / NoClip)
-local function createToggle(y)
-	local row = new("TextButton", {
-		Position = UDim2.fromOffset(15, y),
-		Size = UDim2.new(1, -30, 0, 48),
-		BackgroundColor3 = Colors.Button,
+-- giriş animasyonu kayıtları
+local Entrance = {}
+local function register(obj, kind, slide)
+	local target = 0
+	if kind == "text" then
+		target = obj.TextTransparency
+		obj.TextTransparency = 1
+	else
+		target = obj.BackgroundTransparency
+		obj.BackgroundTransparency = 1
+	end
+	Entrance[#Entrance + 1] = {obj = obj, kind = kind, target = target, pos = obj.Position, slide = slide}
+end
+
+-- açık/kapalı anahtar satırı
+local function createToggle(y, icon)
+	local row = new(S.BUTTON, {
+		Position = UDim2.fromOffset(14, y),
+		Size = UDim2.new(1, -28, 0, 54),
+		BackgroundColor3 = COLORS.button,
 		AutoButtonColor = false,
 		Text = "",
+		ClipsDescendants = true,
+		ZIndex = 2,
 	}, Content)
-	corner(row, 11)
-	local stroke = new("UIStroke", {Color = Colors.Panel, Thickness = 1}, row)
+	corner(row, 13)
+	local rowStroke = stroke(row, COLORS.panel, 1, 0.4)
 
-	local label = new("TextLabel", {
-		Position = UDim2.fromOffset(14, 0),
-		Size = UDim2.new(1, -130, 1, 0),
+	local chip = new(S.FRAME, {
+		Position = UDim2.fromOffset(10, 9),
+		Size = UDim2.fromOffset(36, 36),
+		BackgroundColor3 = COLORS.accent,
+		BorderSizePixel = 0,
+		ZIndex = 3,
+	}, row)
+	corner(chip, 11)
+
+	local chipText = new(S.LABEL, {
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.GothamBold,
+		Text = icon,
+		TextSize = 16,
+		TextColor3 = Color3.new(1, 1, 1),
+		ZIndex = 4,
+	}, chip)
+
+	local label = new(S.LABEL, {
+		Position = UDim2.fromOffset(56, 0),
+		Size = UDim2.new(1, -190, 1, 0),
 		BackgroundTransparency = 1,
 		Font = Enum.Font.GothamSemibold,
 		TextSize = 14,
-		TextColor3 = Colors.Text,
+		TextColor3 = COLORS.text,
 		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Center,
+		ZIndex = 3,
 	}, row)
 
-	local stateText = new("TextLabel", {
+	local stateText = new(S.LABEL, {
 		AnchorPoint = Vector2.new(1, 0.5),
-		Position = UDim2.new(1, -64, 0.5, 0),
-		Size = UDim2.fromOffset(60, 16),
+		Position = UDim2.new(1, -62, 0.5, 0),
+		Size = UDim2.fromOffset(52, 16),
 		BackgroundTransparency = 1,
 		Font = Enum.Font.GothamBold,
 		TextSize = 11,
+		TextColor3 = COLORS.muted,
 		TextXAlignment = Enum.TextXAlignment.Right,
+		ZIndex = 3,
 	}, row)
 
-	local track = new("Frame", {
+	local track = new(S.FRAME, {
 		AnchorPoint = Vector2.new(1, 0.5),
 		Position = UDim2.new(1, -14, 0.5, 0),
 		Size = UDim2.fromOffset(40, 22),
-		BackgroundColor3 = Colors.Panel,
+		BackgroundColor3 = COLORS.panel,
 		BorderSizePixel = 0,
+		ZIndex = 3,
 	}, row)
 	corner(track, 11)
 
-	local knob = new("Frame", {
+	local halo = new(S.FRAME, {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0, 0.5),
+		Size = UDim2.fromOffset(26, 26),
+		BackgroundColor3 = COLORS.green,
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ZIndex = 3,
+	}, track)
+	corner(halo, 13)
+
+	local knob = new(S.FRAME, {
 		AnchorPoint = Vector2.new(0, 0.5),
 		Position = UDim2.new(0, 3, 0.5, 0),
 		Size = UDim2.fromOffset(16, 16),
-		BackgroundColor3 = Colors.Text,
+		BackgroundColor3 = COLORS.text,
 		BorderSizePixel = 0,
+		ZIndex = 4,
 	}, track)
 	corner(knob, 8)
 
-	fx(row, 11)
-	return {Row = row, Stroke = stroke, Label = label, State = stateText, Track = track, Knob = knob}
+	fx(row, 13, COLORS.buttonHover)
+
+	register(row, "bg", true)
+	register(chip, "bg")
+	register(chipText, "text")
+	register(label, "text")
+	register(stateText, "text")
+	register(track, "bg")
+	register(knob, "bg")
+
+	return {
+		Row = row,
+		Stroke = rowStroke,
+		Chip = chip,
+		Label = label,
+		State = stateText,
+		Track = track,
+		Knob = knob,
+		Halo = halo,
+	}
 end
 
-local function setToggle(toggle, on)
-	toggle.State.Text = on and tr("on") or tr("off")
-	tween(toggle.State, 0.2, {TextColor3 = on and Colors.Green or Colors.Muted})
-	tween(toggle.Track, 0.2, {BackgroundColor3 = on and Colors.Green or Colors.Panel})
-	tween(toggle.Stroke, 0.2, {Color = on and Colors.Green or Colors.Panel})
-	tween(toggle.Knob, 0.3, {Position = on and UDim2.new(0, 21, 0.5, 0) or UDim2.new(0, 3, 0.5, 0)}, Enum.EasingStyle.Back)
-end
+local FlyToggle = createToggle(14, "↑")
+local ClipToggle = createToggle(76, "◆")
 
-local FlyToggle = createToggle(12)
-local ClipToggle = createToggle(66)
-
--- Hız kaydırıcısı
-local SpeedCard = new("Frame", {
-	Position = UDim2.fromOffset(15, 122),
-	Size = UDim2.new(1, -30, 0, 74),
-	BackgroundColor3 = Colors.Button,
+-- hız kartı
+local SpeedCard = new(S.FRAME, {
+	Position = UDim2.fromOffset(14, 140),
+	Size = UDim2.new(1, -28, 0, 88),
+	BackgroundColor3 = COLORS.button,
 	BorderSizePixel = 0,
+	ZIndex = 2,
 }, Content)
-corner(SpeedCard, 11)
-new("UIStroke", {Color = Colors.Panel, Thickness = 1}, SpeedCard)
+corner(SpeedCard, 13)
+stroke(SpeedCard, COLORS.panel, 1, 0.4)
 
-local SpeedLabel = new("TextLabel", {
-	Position = UDim2.fromOffset(14, 8),
-	Size = UDim2.new(1, -100, 0, 22),
+local SpeedChip = new(S.FRAME, {
+	Position = UDim2.fromOffset(10, 12),
+	Size = UDim2.fromOffset(36, 36),
+	BackgroundColor3 = COLORS.accent2,
+	BorderSizePixel = 0,
+	ZIndex = 3,
+}, SpeedCard)
+corner(SpeedChip, 11)
+local SpeedChipText = new(S.LABEL, {
+	Size = UDim2.fromScale(1, 1),
+	BackgroundTransparency = 1,
+	Font = Enum.Font.GothamBold,
+	Text = "»",
+	TextSize = 16,
+	TextColor3 = Color3.new(1, 1, 1),
+	ZIndex = 4,
+}, SpeedChip)
+
+local SpeedLabel = new(S.LABEL, {
+	Position = UDim2.fromOffset(56, 13),
+	Size = UDim2.new(1, -110, 0, 22),
 	BackgroundTransparency = 1,
 	Font = Enum.Font.GothamSemibold,
 	TextSize = 13,
-	TextColor3 = Colors.Text,
+	TextColor3 = COLORS.text,
 	TextXAlignment = Enum.TextXAlignment.Left,
+	ZIndex = 3,
 }, SpeedCard)
 
-local SpeedValue = new("TextLabel", {
+local SpeedValue = new(S.LABEL, {
 	AnchorPoint = Vector2.new(1, 0),
-	Position = UDim2.new(1, -14, 0, 8),
+	Position = UDim2.new(1, -14, 0, 12),
 	Size = UDim2.fromOffset(70, 22),
 	BackgroundTransparency = 1,
-	Font = Enum.Font.GothamBold,
-	TextSize = 15,
-	TextColor3 = Colors.Accent,
+	Font = Enum.Font.GothamBlack,
+	TextSize = 16,
+	TextColor3 = COLORS.accent,
 	TextXAlignment = Enum.TextXAlignment.Right,
+	ZIndex = 3,
 }, SpeedCard)
 
-local Bar = new("Frame", {
-	Position = UDim2.fromOffset(14, 50),
-	Size = UDim2.new(1, -28, 0, 6),
-	BackgroundColor3 = Colors.Panel,
+local Bar = new(S.FRAME, {
+	Position = UDim2.fromOffset(14, 58),
+	Size = UDim2.new(1, -28, 0, 8),
+	BackgroundColor3 = COLORS.panel,
 	BorderSizePixel = 0,
+	ZIndex = 3,
 }, SpeedCard)
-corner(Bar, 3)
+corner(Bar, 4)
 
-local Fill = new("Frame", {
+local Fill = new(S.FRAME, {
 	Size = UDim2.fromScale(0, 1),
-	BackgroundColor3 = Colors.Accent,
+	BackgroundColor3 = COLORS.accent,
 	BorderSizePixel = 0,
+	ZIndex = 4,
 }, Bar)
-corner(Fill, 3)
-new("UIGradient", {
-	Color = ColorSequence.new(Colors.Accent, Colors.AccentLight),
+corner(Fill, 4)
+local FillGradient = new(S.GRADIENT, {
+	Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, COLORS.accent),
+		ColorSequenceKeypoint.new(1, COLORS.accent2),
+	}),
 }, Fill)
+TweenService:Create(FillGradient, TweenInfo.new(3.2, Ease.Linear, EaseDir.In, -1), {Rotation = 360}):Play()
 
-local SliderKnob = new("Frame", {
+local SliderKnob = new(S.FRAME, {
 	AnchorPoint = Vector2.new(0.5, 0.5),
 	Position = UDim2.fromScale(0, 0.5),
-	Size = UDim2.fromOffset(16, 16),
-	BackgroundColor3 = Colors.Text,
+	Size = UDim2.fromOffset(18, 18),
+	BackgroundColor3 = COLORS.text,
 	BorderSizePixel = 0,
+	ZIndex = 5,
 }, Bar)
-corner(SliderKnob, 8)
-new("UIStroke", {Color = Colors.Accent, Thickness = 2}, SliderKnob)
+corner(SliderKnob, 9)
+stroke(SliderKnob, COLORS.accent, 2, 0)
 
-local SliderHit = new("TextButton", {
-	Position = UDim2.fromOffset(0, 36),
-	Size = UDim2.new(1, 0, 0, 38),
+local SliderHit = new(S.BUTTON, {
+	Position = UDim2.fromOffset(10, 44),
+	Size = UDim2.new(1, -20, 0, 32),
 	BackgroundTransparency = 1,
 	Text = "",
+	ZIndex = 6,
 }, SpeedCard)
+
+register(SpeedCard, "bg", true)
+register(SpeedChip, "bg")
+register(SpeedChipText, "text")
+register(SpeedLabel, "text")
+register(SpeedValue, "text")
+register(Bar, "bg")
+register(Fill, "bg")
+register(SliderKnob, "bg")
 
 local function setSpeed(value)
 	value = math.clamp(math.floor(value / CONFIG.Step + 0.5) * CONFIG.Step, CONFIG.MinSpeed, CONFIG.MaxSpeed)
@@ -756,190 +1414,398 @@ local function setSpeed(value)
 end
 
 local function sliderFromX(x)
-	local width = math.max(Bar.AbsoluteSize.X, 1)
-	local ratio = math.clamp((x - Bar.AbsolutePosition.X) / width, 0, 1)
+	local ratio = math.clamp((x - Bar.AbsolutePosition.X) / math.max(Bar.AbsoluteSize.X, 1), 0, 1)
 	setSpeed(CONFIG.MinSpeed + ratio * (CONFIG.MaxSpeed - CONFIG.MinSpeed))
 end
 
 trackDrag(SliderHit, function(input)
 	sliderFromX(input.Position.X)
-	tween(SliderKnob, 0.12, {Size = UDim2.fromOffset(21, 21)}, Enum.EasingStyle.Back)
+	tween(SliderKnob, 0.1, {Size = UDim2.fromOffset(22, 22)})
 end, function(changed)
 	sliderFromX(changed.Position.X)
 end)
-bind(UIS.InputEnded, function(input)
+
+UIS.InputEnded:Connect(function(input)
 	if isPointer(input) then
-		tween(SliderKnob, 0.2, {Size = UDim2.fromOffset(16, 16)})
+		tween(SliderKnob, 0.18, {Size = UDim2.fromOffset(18, 18)}, Ease.Back)
 	end
 end)
 
--- Dil butonları
-local LanguageLabel = new("TextLabel", {
-	Position = UDim2.fromOffset(16, 206),
-	Size = UDim2.new(1, -32, 0, 18),
+-- dil seçimi
+local LanguageLabel = new(S.LABEL, {
+	Position = UDim2.fromOffset(16, 240),
+	Size = UDim2.new(1, -32, 0, 16),
 	BackgroundTransparency = 1,
 	Font = Enum.Font.GothamSemibold,
-	TextSize = 12,
-	TextColor3 = Colors.Muted,
+	TextSize = 11,
+	TextColor3 = COLORS.muted,
 	TextXAlignment = Enum.TextXAlignment.Left,
+	ZIndex = 3,
 }, Content)
 
-local LanguageRow = new("Frame", {
-	Position = UDim2.fromOffset(15, 228),
-	Size = UDim2.new(1, -30, 0, 32),
+local LanguageRow = new(S.FRAME, {
+	Position = UDim2.fromOffset(14, 262),
+	Size = UDim2.new(1, -28, 0, 34),
 	BackgroundTransparency = 1,
+	ZIndex = 2,
 }, Content)
-new("UIListLayout", {
-	FillDirection = Enum.FillDirection.Horizontal,
-	SortOrder = Enum.SortOrder.LayoutOrder,
+new(S.LAYOUT, {
+	FillDirection = Enum[S.ENUM_FILLDIR].Horizontal,
+	SortOrder = Enum[S.ENUM_SORTORDER].LayoutOrder,
 	Padding = UDim.new(0, 6),
 }, LanguageRow)
 
 local LanguageButtons = {}
 for index, code in ipairs(LanguageList) do
-	local button = new("TextButton", {
+	local button = new(S.BUTTON, {
 		LayoutOrder = index,
 		Size = UDim2.new(0.2, -5, 1, 0),
-		BackgroundColor3 = Colors.Button,
+		BackgroundColor3 = COLORS.button,
 		AutoButtonColor = false,
 		Font = Enum.Font.GothamBold,
 		Text = code,
 		TextSize = 12,
-		TextColor3 = Colors.Muted,
+		TextColor3 = COLORS.muted,
+		ZIndex = 3,
 	}, LanguageRow)
-	corner(button, 8)
-	fx(button, 8)
+	corner(button, 9)
+	local scale = fx(button, 9, COLORS.buttonHover)
 	button.Activated:Connect(function()
+		if State.Language == code then
+			return
+		end
 		State.Language = code
-		Refresh()
+		tween(scale, 0.25, {Scale = 1.12}, Ease.Back)
+		task.delay(0.12, function()
+			tween(scale, 0.2, {Scale = 1})
+		end)
+		if Refresh then
+			Refresh()
+		end
 	end)
 	LanguageButtons[code] = button
+	register(button, "bg")
 end
 
--- Discord butonu (daveti kopyalar; olmazsa seçilebilir metin kutusu açar)
-local DiscordButton = new("TextButton", {
-	Position = UDim2.fromOffset(15, 272),
-	Size = UDim2.new(1, -30, 0, 44),
-	BackgroundColor3 = Colors.Discord,
+register(LanguageLabel, "text")
+register(LanguageRow, "bg", true)
+
+-- Discord düğmesi
+local DiscordButton = new(S.BUTTON, {
+	Position = UDim2.fromOffset(14, 306),
+	Size = UDim2.new(1, -28, 0, 48),
+	BackgroundColor3 = COLORS.discord,
 	AutoButtonColor = false,
+	Text = "",
+	ClipsDescendants = true,
+	ZIndex = 2,
+}, Content)
+corner(DiscordButton, 13)
+
+local Shine = new(S.FRAME, {
+	Position = UDim2.new(-0.5, 0, 0.5, 0),
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	Size = UDim2.fromOffset(64, 120),
+	Rotation = 22,
+	BackgroundColor3 = Color3.new(1, 1, 1),
+	BackgroundTransparency = 0.86,
+	BorderSizePixel = 0,
+	ZIndex = 3,
+}, DiscordButton)
+
+local DiscordIcon = new(S.LABEL, {
+	Position = UDim2.fromOffset(16, 0),
+	Size = UDim2.fromOffset(20, 48),
+	BackgroundTransparency = 1,
+	Font = Enum.Font.GothamBold,
+	Text = "●",
+	TextSize = 14,
+	TextColor3 = Color3.new(1, 1, 1),
+	ZIndex = 5,
+}, DiscordButton)
+
+local DiscordText = new(S.LABEL, {
+	Position = UDim2.fromOffset(44, 0),
+	Size = UDim2.new(1, -110, 48),
+	BackgroundTransparency = 1,
 	Font = Enum.Font.GothamBold,
 	TextSize = 14,
-	TextColor3 = Colors.Text,
-}, Content)
-corner(DiscordButton, 11)
-fx(DiscordButton, 11)
+	TextColor3 = Color3.new(1, 1, 1),
+	TextXAlignment = Enum.TextXAlignment.Left,
+	TextYAlignment = Enum.TextYAlignment.Center,
+	ZIndex = 5,
+}, DiscordButton)
 
-local DiscordBox = new("TextBox", {
-	Position = UDim2.fromOffset(15, 272),
-	Size = UDim2.new(1, -30, 0, 44),
-	BackgroundColor3 = Colors.Panel,
-	Font = Enum.Font.Gotham,
+local DiscordHint = new(S.LABEL, {
+	AnchorPoint = Vector2.new(1, 0.5),
+	Position = UDim2.new(1, -14, 0.5, 0),
+	Size = UDim2.fromOffset(70, 20),
+	BackgroundTransparency = 1,
+	Font = Enum.Font.GothamBold,
+	TextSize = 10,
+	TextColor3 = Color3.fromRGB(214, 220, 255),
+	TextXAlignment = Enum.TextXAlignment.Right,
+	ZIndex = 5,
+}, DiscordButton)
+
+fx(DiscordButton, 13, COLORS.discordHover)
+
+DiscordButton.MouseEnter:Connect(function()
+	Shine.Position = UDim2.new(-0.5, 0, 0.5, 0)
+	Shine.BackgroundTransparency = 0.86
+	tween(Shine, 0.65, {Position = UDim2.new(1.5, 0, 0.5, 0), BackgroundTransparency = 0.95}, Ease.Sine)
+end)
+
+register(DiscordButton, "bg", true)
+register(DiscordIcon, "text")
+register(DiscordText, "text")
+register(DiscordHint, "text")
+
+-- kopyalama yedeği (metin kutusu)
+local DiscordBox = new(S.TEXTBOX, {
+	Position = UDim2.fromOffset(14, 306),
+	Size = UDim2.new(1, -28, 0, 48),
+	BackgroundColor3 = COLORS.panel,
+	BackgroundTransparency = 0,
+	Font = Enum.Font.GothamBold,
 	Text = "",
 	TextSize = 13,
-	TextColor3 = Colors.Text,
+	TextColor3 = COLORS.text,
 	TextEditable = false,
+	Selectable = false,
 	ClearTextOnFocus = false,
 	Visible = false,
-	ZIndex = 5,
+	ZIndex = 8,
 }, Content)
-corner(DiscordBox, 11)
+corner(DiscordBox, 13)
+stroke(DiscordBox, COLORS.discord, 2, 0.2)
 
-local Info = new("TextLabel", {
-	Position = UDim2.fromOffset(16, 326),
+local Info = new(S.LABEL, {
+	Position = UDim2.fromOffset(16, 362),
 	Size = UDim2.new(1, -32, 0, 30),
 	BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham,
 	TextSize = 10,
-	TextColor3 = Colors.Muted,
+	TextColor3 = COLORS.muted,
 	TextWrapped = true,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	TextYAlignment = Enum.TextYAlignment.Top,
+	ZIndex = 3,
 }, Content)
+register(Info, "text")
 
+-- bildirim (toast)
+local ToastFrame = new(S.FRAME, {
+	AnchorPoint = Vector2.new(0.5, 0),
+	Position = UDim2.new(0.5, 0, 0, -48),
+	Size = UDim2.new(1, -40, 0, 38),
+	BackgroundColor3 = COLORS.green,
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+	ZIndex = 20,
+}, Main)
+corner(ToastFrame, 12)
+
+local ToastText = new(S.LABEL, {
+	Size = UDim2.fromScale(1, 1),
+	BackgroundTransparency = 1,
+	Font = Enum.Font.GothamBold,
+	TextSize = 13,
+	TextColor3 = COLORS.text,
+	TextTransparency = 1,
+	ZIndex = 21,
+}, ToastFrame)
+
+local toastToken = 0
+local function toast(message, color)
+	toastToken = toastToken + 1
+	local token = toastToken
+	ToastText.Text = message
+	ToastFrame.BackgroundColor3 = color or COLORS.green
+	tween(ToastFrame, 0.25, {BackgroundTransparency = 0, Position = UDim2.new(0.5, 0, 0, 8)}, Ease.Back)
+	tween(ToastText, 0.25, {TextTransparency = 0})
+	task.delay(1.9, function()
+		if token ~= toastToken then
+			return
+		end
+		tween(ToastFrame, 0.3, {BackgroundTransparency = 1, Position = UDim2.new(0.5, 0, 0, -48)}, Ease.Quint)
+		tween(ToastText, 0.3, {TextTransparency = 1})
+	end)
+end
+
+-- paneli açan yüzen düğme
+local Launcher = new(S.BUTTON, {
+	AnchorPoint = Vector2.new(1, 0),
+	Position = UDim2.new(1, -16, 0, 16),
+	Size = UDim2.fromOffset(46, 46),
+	BackgroundColor3 = COLORS.accent,
+	AutoButtonColor = false,
+	Font = Enum.Font.GothamBlack,
+	Text = "CS",
+	TextSize = 16,
+	TextColor3 = Color3.new(1, 1, 1),
+	Visible = false,
+	ZIndex = 30,
+}, Gui)
+corner(Launcher, 15)
+local LauncherGradient = new(S.GRADIENT, {
+	Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, COLORS.accent),
+		ColorSequenceKeypoint.new(1, COLORS.accent2),
+	}),
+	Rotation = 45,
+}, Launcher)
+local LauncherScale = new(S.SCALE, {}, Launcher)
+fx(Launcher, 15)
+TweenService:Create(LauncherGradient, TweenInfo.new(9, Ease.Linear, EaseDir.In, -1), {Rotation = 405}):Play()
+
+--------------------------------------------------------------------
+-- 6) Dil bilgisi / yardımcılar
+--------------------------------------------------------------------
 local function infoText()
-	return UIS.TouchEnabled and tr("infoTouch") or tr("info")
+	return MOBILE and tr("infoTouch") or tr("info")
 end
 
 local flashId = 0
 local function flashDiscord(text, color)
-	flashId += 1
+	flashId = flashId + 1
 	local id = flashId
-	DiscordButton.Text = text
-	tween(DiscordButton, 0.15, {BackgroundColor3 = color})
+	DiscordText.Text = text
+	DiscordHint.Text = ""
+	tween(DiscordButton, 0.18, {BackgroundColor3 = color or COLORS.green})
 	task.delay(1.6, function()
-		if id == flashId and not Closed then
-			DiscordButton.Text = tr("discord")
-			tween(DiscordButton, 0.3, {BackgroundColor3 = Colors.Discord})
+		if id == flashId then
+			DiscordText.Text = tr("discord")
+			DiscordHint.Text = tr("copy")
+			tween(DiscordButton, 0.3, {BackgroundColor3 = COLORS.discord})
 		end
 	end)
 end
 
 local function hideBox()
 	DiscordBox.Visible = false
+	DiscordBox.TextEditable = false
+	DiscordBox.Selectable = false
+	DiscordBox.Text = ""
+	DiscordButton.Visible = true
 	Info.Text = infoText()
 end
 
-DiscordButton.Activated:Connect(function()
-	if not INVITE then
-		flashDiscord(tr("failed"), Colors.Red)
-		return
+-- Roblox'ta pano yazma API'si yok; global fonksiyon varsa (exploit/command bar) onu dener
+local function globalFn(name)
+	local env = (type(getfenv) == "function") and getfenv(0) or _G
+	if type(env) == "table" then
+		local fn = rawget(env, name)
+		if type(fn) == "function" then
+			return fn
+		end
+	end
+	return nil
+end
+
+-- kopyalama: önce native/global yol, yoksa odaklı metin kutusu
+local function copyInvite()
+	local text = S.INVITE
+
+	local setter = globalFn(S.SETCLIPBOARD) or globalFn(S.TOCLIPBOARD)
+	if setter then
+		local ok = pcall(setter, text)
+		if ok then
+			return true
+		end
 	end
 
-	local clip = getGlobal(SC) or getGlobal(TC)
-	if type(clip) == "function" and pcall(clip, INVITE) then
-		flashDiscord(tr("copied"), Colors.Green)
-		return
-	end
-
-	DiscordBox.Text = INVITE
+	-- Roblox'ta yazma API'si yok: metni seçili metin kutusunda göster
+	DiscordBox.Text = text
 	DiscordBox.Visible = true
+	DiscordBox.TextEditable = true
+	DiscordBox.Selectable = true
+	DiscordButton.Visible = false
 	Info.Text = tr("manual")
 	pcall(function()
 		DiscordBox:CaptureFocus()
+		DiscordBox.CursorPosition = #text
 		DiscordBox.SelectionStart = 1
-		DiscordBox.CursorPosition = #INVITE + 1
 	end)
-	task.delay(6, function()
-		if not Closed and DiscordBox.Visible and not DiscordBox:IsFocused() then
+	return false
+end
+
+DiscordButton.Activated:Connect(function()
+	local native = copyInvite()
+	if native then
+		flashDiscord(tr("copied"), COLORS.green)
+		toast(tr("copied"), COLORS.green)
+	else
+		toast(tr("manual"), COLORS.discord)
+	end
+end)
+
+DiscordBox.FocusLost:Connect(function()
+	task.delay(0.15, function()
+		if DiscordBox.Visible and not DiscordBox:IsFocused() then
 			hideBox()
 		end
 	end)
 end)
 
-DiscordBox.FocusLost:Connect(hideBox)
+-- kutuya tekrar odaklanınca davet metnini ve seçimi tazele
+DiscordBox.FocusGained:Connect(function()
+	if DiscordBox.Text ~= S.INVITE then
+		DiscordBox.Text = S.INVITE
+	end
+	pcall(function()
+		DiscordBox.CursorPosition = #S.INVITE
+		DiscordBox.SelectionStart = 1
+	end)
+end)
 
--- Mobil yukarı / aşağı butonları (sadece uçarken görünür)
+-- Ctrl+C algılama (odaklı metin kutusunda kopyalama)
+UIS.InputBegan:Connect(function(input, processed)
+	if input.KeyCode == KeyCode.C then
+		local ctrl = UIS:IsKeyDown(KeyCode.LeftControl) or UIS:IsKeyDown(KeyCode.RightControl)
+		if ctrl and DiscordBox.Visible and DiscordBox:IsFocused() then
+			flashDiscord(tr("copied"), COLORS.green)
+			toast(tr("copied"), COLORS.green)
+		end
+	end
+end)
+
+--------------------------------------------------------------------
+-- 7) Mobil kontrol paneli
+--------------------------------------------------------------------
 local TouchPad, PadScale
 local PadButtons = {}
 local padShown = false
 
-if UIS.TouchEnabled then
-	TouchPad = new("Frame", {
+if MOBILE then
+	TouchPad = new(S.FRAME, {
 		AnchorPoint = Vector2.new(1, 1),
-		Position = UDim2.new(1, -20, 1, -190),
+		Position = UDim2.new(1, -18, 1, -170),
 		Size = UDim2.fromOffset(58, 116),
 		BackgroundTransparency = 1,
 		Visible = false,
+		ZIndex = 25,
 	}, Gui)
-	PadScale = new("UIScale", {}, TouchPad)
+	PadScale = new(S.SCALE, {}, TouchPad)
 
 	local function padButton(symbol, y, key)
-		local button = new("TextButton", {
+		local button = new(S.BUTTON, {
 			Position = UDim2.fromOffset(0, y),
 			Size = UDim2.fromOffset(58, 52),
-			BackgroundColor3 = Colors.Button,
+			BackgroundColor3 = COLORS.button,
 			AutoButtonColor = false,
 			Font = Enum.Font.GothamBold,
 			Text = symbol,
-			TextSize = 22,
-			TextColor3 = Colors.Text,
+			TextSize = 20,
+			TextColor3 = COLORS.text,
+			ZIndex = 26,
 		}, TouchPad)
 		corner(button, 14)
-		new("UIStroke", {Color = Colors.Accent, Thickness = 1.5}, button)
+		stroke(button, COLORS.accent, 1.5, 0.3)
 		button.InputBegan:Connect(function(input)
 			if isPointer(input) then
 				Hold[key] = input
-				tween(button, 0.1, {BackgroundColor3 = Colors.Accent})
+				tween(button, 0.1, {BackgroundColor3 = COLORS.accent})
 			end
 		end)
 		PadButtons[key] = button
@@ -949,47 +1815,54 @@ if UIS.TouchEnabled then
 	padButton("▼", 64, "Down")
 end
 
-bind(UIS.InputEnded, function(input)
+UIS.InputEnded:Connect(function(input)
 	for key, held in pairs(Hold) do
 		if held == input then
 			Hold[key] = nil
 			if PadButtons[key] then
-				tween(PadButtons[key], 0.15, {BackgroundColor3 = Colors.Button})
+				tween(PadButtons[key], 0.14, {BackgroundColor3 = COLORS.button})
 			end
 		end
 	end
 end)
 
-----------------------------------------------------------------------
--- Yenileme / olaylar
-----------------------------------------------------------------------
+--------------------------------------------------------------------
+-- 8) Yenileme (dil / durum güncellemesi)
+--------------------------------------------------------------------
+local function setToggle(toggle, on)
+	toggle.State.Text = on and tr("on") or tr("off")
+	tween(toggle.State, 0.2, {TextColor3 = on and COLORS.green or COLORS.muted})
+	tween(toggle.Track, 0.2, {BackgroundColor3 = on and COLORS.green or COLORS.panel})
+	tween(toggle.Stroke, 0.2, {Color = on and COLORS.green or COLORS.panel, Transparency = on and 0.3 or 0.4})
+	tween(toggle.Chip, 0.2, {BackgroundColor3 = on and COLORS.green or COLORS.accent})
+	tween(toggle.Knob, 0.28, {
+		Position = on and UDim2.new(0, 21, 0.5, 0) or UDim2.new(0, 3, 0.5, 0),
+	}, Ease.Back)
+	tween(toggle.Halo, 0.25, {
+		Position = on and UDim2.new(1, 0, 0.5, 0) or UDim2.new(0, 0, 0.5, 0),
+		BackgroundTransparency = on and 0.65 or 1,
+	})
+end
 
 Refresh = function()
-	if Closed then
-		return
-	end
-
 	Title.Text = tr("title")
 	Subtitle.Text = tr("subtitle")
 	FlyToggle.Label.Text = tr("fly")
 	ClipToggle.Label.Text = tr("clip")
 	SpeedLabel.Text = tr("speed")
 	LanguageLabel.Text = tr("language")
-	if not DiscordBox.Visible and DiscordButton.BackgroundColor3 == Colors.Discord then
-		DiscordButton.Text = tr("discord")
-	end
-	if not DiscordBox.Visible then
-		Info.Text = infoText()
-	end
+	DiscordText.Text = tr("discord")
+	DiscordHint.Text = tr("copy")
+	Info.Text = infoText()
 
 	setToggle(FlyToggle, State.Fly)
 	setToggle(ClipToggle, State.NoClip)
 
 	for code, button in pairs(LanguageButtons) do
 		local active = code == State.Language
-		tween(button, 0.25, {
-			BackgroundColor3 = active and Colors.Accent or Colors.Button,
-			TextColor3 = active and Colors.Text or Colors.Muted,
+		tween(button, 0.22, {
+			BackgroundColor3 = active and COLORS.accent or COLORS.button,
+			TextColor3 = active and COLORS.text or COLORS.muted,
 		})
 	end
 
@@ -997,11 +1870,11 @@ Refresh = function()
 		padShown = State.Fly
 		if padShown then
 			for _, button in pairs(PadButtons) do
-				button.BackgroundColor3 = Colors.Button
+				button.BackgroundColor3 = COLORS.button
 			end
 			TouchPad.Visible = true
 			PadScale.Scale = 0.6
-			tween(PadScale, 0.3, {Scale = 1}, Enum.EasingStyle.Back)
+			tween(PadScale, 0.3, {Scale = 1}, Ease.Back)
 		else
 			TouchPad.Visible = false
 		end
@@ -1012,7 +1885,15 @@ FlyToggle.Row.Activated:Connect(function()
 	if State.Fly then
 		stopFly()
 	else
-		startFly()
+		if not Root or not Humanoid or Humanoid.Health <= 0 then
+			toast(tr("waitChar"), COLORS.red)
+			return
+		end
+		if not startFly() then
+			toast(tr("waitChar"), COLORS.red)
+			return
+		end
+		toast(tr("fly") .. " · " .. tr("on"), COLORS.green)
 	end
 	Refresh()
 end)
@@ -1020,12 +1901,20 @@ end)
 ClipToggle.Row.Activated:Connect(function()
 	if State.NoClip then
 		stopClip()
+		toast(tr("clip") .. " · " .. tr("off"), COLORS.muted)
 	else
-		startClip()
+		if not startClip() then
+			toast(tr("waitChar"), COLORS.red)
+			return
+		end
+		toast(tr("clip") .. " · " .. tr("on"), COLORS.green)
 	end
 	Refresh()
 end)
 
+--------------------------------------------------------------------
+-- 9) Pencere kontrolleri (küçült / kapat / sürükle)
+--------------------------------------------------------------------
 Minimize.Activated:Connect(function()
 	State.Minimized = not State.Minimized
 	local mini = State.Minimized
@@ -1034,135 +1923,218 @@ Minimize.Activated:Connect(function()
 	if not mini then
 		Content.Visible = true
 	end
-	tween(Content, 0.2, {GroupTransparency = mini and 1 or 0})
-	tween(Subtitle, 0.2, {TextTransparency = mini and 1 or 0})
-	tween(Main, 0.35, {Size = mini and MINI_SIZE or FULL_SIZE}, Enum.EasingStyle.Quint)
+	tween(Content, 0.22, {GroupTransparency = mini and 1 or 0})
+	tween(Subtitle, 0.22, {TextTransparency = mini and 1 or 0})
+	tween(Main, 0.32, {Size = mini and MINI_SIZE or FULL_SIZE}, Ease.Quint)
 
-	task.delay(0.2, function()
-		if not Closed and State.Minimized == mini then
+	task.delay(0.22, function()
+		if State.Minimized == mini then
 			Content.Visible = not mini
 		end
 	end)
 end)
 
-local setMouseFree
-
--- Kapat: her şeyi temizler
-Close.Activated:Connect(function()
-	if Closed then
-		return
-	end
-	Closed = true
-
-	stopFly()
-	stopClip()
-	setMouseFree(false)
-	if DiedConn then
-		DiedConn:Disconnect()
-	end
-	for _, conn in ipairs(Conns) do
-		conn:Disconnect()
-	end
-	table.clear(Conns)
-
-	local out = tween(MainScale, 0.25, {Scale = 0}, Enum.EasingStyle.Back, Enum.EasingDirection.In)
-	out.Completed:Wait()
-	Gui:Destroy()
-end)
-
--- Alt: Shift Lock açıkken fareyi serbest bırakır / tekrar kilitler
-local FreeMouse = new("TextButton", {
-	Size = UDim2.fromOffset(1, 1),
-	BackgroundTransparency = 1,
-	Text = "",
-	Modal = false,
-	Active = false,
-}, Gui)
-
-local MouseFree = false
-setMouseFree = function(on)
-	MouseFree = on
-	FreeMouse.Modal = on
-	pcall(function()
-		RunService:UnbindFromRenderStep("CRSETA_Mouse")
-	end)
-	if on then
-		-- Oyunun / Shift Lock'un fare kilidini her karede geri alır
-		RunService:BindToRenderStep("CRSETA_Mouse", Enum.RenderPriority.Camera.Value + 1, function()
-			UIS.MouseBehavior = Enum.MouseBehavior.Default
-			UIS.MouseIconEnabled = true
-		end)
-	end
-end
-
-bind(UIS.InputBegan, function(input)
-	if input.KeyCode == Enum.KeyCode.LeftAlt or input.KeyCode == Enum.KeyCode.RightAlt then
-		setMouseFree(not MouseFree)
-	end
-end)
-
--- Insert ile gizle / göster (Shift, Roblox'un Shift Lock tuşu olduğu için kullanılmıyor)
-bind(UIS.InputBegan, function(input, processed)
-	if processed or input.KeyCode ~= Enum.KeyCode.Insert then
-		return
-	end
-	State.Hidden = not State.Hidden
-	if State.Hidden then
-		local t = tween(MainScale, 0.2, {Scale = 0}, Enum.EasingStyle.Back, Enum.EasingDirection.In)
-		t.Completed:Connect(function()
+local function setPanelHidden(hidden)
+	State.Hidden = hidden
+	if hidden then
+		tween(Main, 0.28, {Size = UDim2.fromOffset(352, 60)}, Ease.Quint)
+		task.delay(0.28, function()
 			if State.Hidden then
 				Main.Visible = false
 			end
 		end)
+		Launcher.Visible = true
+		tween(LauncherScale, 0.3, {Scale = 1}, Ease.Back)
 	else
+		Launcher.Visible = false
 		Main.Visible = true
-		tween(MainScale, 0.3, {Scale = 1}, Enum.EasingStyle.Back)
+		tween(Main, 0.32, {Size = State.Minimized and MINI_SIZE or FULL_SIZE}, Ease.Back)
 	end
+end
+
+Close.Activated:Connect(function()
+	setPanelHidden(true)
 end)
 
--- Pencere sürükleme (ekran dışına çıkmaz)
+Launcher.Activated:Connect(function()
+	setPanelHidden(false)
+end)
+
+-- sürükleme (ekran içinde kalacak şekilde)
 local dragStart, startPosition
+
+-- üst bar butonları basılıyken pencere sürüklenmesin
+local uiPressed = false
+local function markPressed(object)
+	object.InputBegan:Connect(function()
+		uiPressed = true
+	end)
+	object.InputEnded:Connect(function()
+		uiPressed = false
+	end)
+end
+markPressed(Minimize)
+markPressed(Close)
+
+local function clampPosition(pos)
+	local camera = workspace.CurrentCamera
+	local viewport = camera and camera.ViewportSize or Vector2.new(1920, 1080)
+	local size = Main.AbsoluteSize
+	local half = size * 0.5
+	local x = math.clamp(pos.X.Offset, half.X - viewport.X * pos.X.Scale + 8, viewport.X * (1 - pos.X.Scale) - half.X - 8)
+	local y = math.clamp(pos.Y.Offset, half.Y - viewport.Y * pos.Y.Scale + 8, viewport.Y * (1 - pos.Y.Scale) - half.Y - 8)
+	return UDim2.new(pos.X.Scale, x, pos.Y.Scale, y)
+end
+
 trackDrag(TopBar, function(input)
+	if uiPressed then
+		return false
+	end
 	dragStart = input.Position
 	startPosition = Main.Position
 end, function(changed)
 	local delta = changed.Position - dragStart
-	local view = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1920, 1080)
-	local maxX = view.X / 2 - 40
-	Main.Position = UDim2.new(
-		startPosition.X.Scale,
-		math.clamp(startPosition.X.Offset + delta.X, -maxX, maxX),
-		startPosition.Y.Scale,
-		math.clamp(startPosition.Y.Offset + delta.Y, -view.Y / 2, view.Y / 2 - 40)
-	)
+	Main.Position = clampPosition(UDim2.new(
+		startPosition.X.Scale, startPosition.X.Offset + delta.X,
+		startPosition.Y.Scale, startPosition.Y.Offset + delta.Y
+	))
 end)
 
--- Karakter
+--------------------------------------------------------------------
+-- 10) Karakter olayları
+--------------------------------------------------------------------
 local function setupCharacter(char)
 	stopFly()
 	stopClip()
-	if DiedConn then
-		DiedConn:Disconnect()
-		DiedConn = nil
-	end
 
 	Character = char
-	Humanoid = char:WaitForChild("Humanoid")
-	Root = char:WaitForChild("HumanoidRootPart")
+	Humanoid = char:WaitForChild(S.HUMANOID, 10)
+	Root = char:WaitForChild(S.ROOTPART, 10)
+	if not Humanoid or not Root then
+		return
+	end
 
-	DiedConn = Humanoid.Died:Connect(function()
+	Humanoid[S.DIED]:Connect(function()
 		stopFly()
 		stopClip()
-		Refresh()
+		if Refresh then
+			Refresh()
+		end
 	end)
-	Refresh()
+
+	if Refresh then
+		Refresh()
+	end
 end
 
-bind(Player.CharacterAdded, setupCharacter)
+Player[S.CHARACTERADDED]:Connect(setupCharacter)
+Player[S.CHARACTERREMOVING]:Connect(function()
+	stopFly()
+	stopClip()
+	if Refresh then
+		Refresh()
+	end
+end)
 if Player.Character then
 	task.spawn(setupCharacter, Player.Character)
 end
 
+--------------------------------------------------------------------
+-- 11) Başlangıç animasyonları
+--------------------------------------------------------------------
 setSpeed(CONFIG.Speed)
 Refresh()
-tween(MainScale, 0.5, {Scale = 1}, Enum.EasingStyle.Back)
+
+task.spawn(function()
+	tween(MainScale, 0.45, {Scale = 1}, Ease.Back)
+	tween(Main, 0.45, {Position = UDim2.new(0.5, 0, 0.5, 0)}, Ease.Quint)
+
+	for index, item in ipairs(Entrance) do
+		task.delay(0.12 + index * 0.035, function()
+			local obj = item.obj
+			if not obj or not obj.Parent then
+				return
+			end
+			if item.kind == "text" then
+				tween(obj, 0.4, {TextTransparency = item.target})
+			else
+				tween(obj, 0.4, {BackgroundTransparency = item.target})
+			end
+			if item.slide then
+				local target = item.pos
+				obj.Position = UDim2.new(target.X.Scale, target.X.Offset, target.Y.Scale, target.Y.Offset + 14)
+				tween(obj, 0.45, {Position = target}, Ease.Quint)
+			end
+		end)
+	end
+end)
+
+--------------------------------------------------------------------
+-- 12) Anahtar bekçisi (süre dolunca / listeden silinince kilitler)
+--------------------------------------------------------------------
+task.spawn(function()
+	local lastCheck = os.clock()
+	while Gui.Parent do
+		task.wait(5)
+		local expired = nowTime() >= KeyExpiry
+		if not expired and os.clock() - lastCheck >= KEY_RECHECK then
+			lastCheck = os.clock()
+			local keys = fetchKeys()
+			if keys then
+				local store = loadStore()
+				if not store.last or not keys[store.last] then
+					expired = true
+				end
+			end
+		end
+		if expired then
+			stopFly()
+			stopClip()
+			Main.Visible = false
+			Launcher.Visible = false
+			Refresh()
+			KeyExpiry = runKeyGate(kt("ended"))
+			lastCheck = os.clock()
+			Main.Visible = not State.Hidden
+			Launcher.Visible = State.Hidden
+		end
+	end
+end)
+
+end, function(e)
+	return debug.traceback(tostring(e), 2)
+end)
+
+-- Hata olursa sessizce takılmak yerine ekranda gösterir (kopyalanabilir)
+if not __ok then
+	warn("[CR-SETA] " .. tostring(__err))
+	local old = PlayerGui:FindFirstChild("crseta_error")
+	if old then
+		old:Destroy()
+	end
+	local holder = Instance.new("ScreenGui")
+	holder.Name = "crseta_error"
+	holder.ResetOnSpawn = false
+	holder.DisplayOrder = 200
+	holder.Parent = PlayerGui
+	local box = Instance.new("TextBox")
+	box.AnchorPoint = Vector2.new(0.5, 0)
+	box.Position = UDim2.new(0.5, 0, 0, 20)
+	box.Size = UDim2.fromOffset(520, 150)
+	box.BackgroundColor3 = Color3.fromRGB(35, 12, 16)
+	box.TextColor3 = Color3.fromRGB(255, 190, 195)
+	box.Font = Enum.Font.Code
+	box.TextSize = 13
+	box.TextWrapped = true
+	box.MultiLine = true
+	box.ClearTextOnFocus = false
+	box.TextEditable = false
+	box.TextXAlignment = Enum.TextXAlignment.Left
+	box.TextYAlignment = Enum.TextYAlignment.Top
+	box.Text = "CR-SETA HATA (kopyalayıp gönderin):\n" .. tostring(__err)
+	box.Parent = holder
+	Instance.new("UICorner", box).CornerRadius = UDim.new(0, 10)
+	local stroke = Instance.new("UIStroke", box)
+	stroke.Color = Color3.fromRGB(235, 80, 90)
+	stroke.Thickness = 1.5
+end
