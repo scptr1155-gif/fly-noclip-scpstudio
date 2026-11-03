@@ -54,8 +54,11 @@ local function decode(chunk)
 	return table.concat(buffer)
 end
 
---------------------------------------------------------------------
--- Jeton doğrulama (ANA KOD'un verdiği imzalı jeton)
+----------------------------------------------------------------- Jeton doğrulama (ANA KOD'un verdiği imzalı jeton)
+--
+-- Bu kod kendi başına çalışmaz. ANA KOD (main-script) anahtarı
+-- doğrulayıp imzalı jeton yazar; jeton geçerliyse arayüz açılır.
+-- Geçerli jeton yoksa burada sessizce çıkılır (tek yükleyici: ANA KOD).
 --------------------------------------------------------------------
 local Env
 do
@@ -66,23 +69,12 @@ do
 end
 
 local K = {
-	K_SALT = decode({94, 249, 160, 199, 59, 143, 238, 103, 232, 213, 139, 126, 72, 33, 236, 110, 167, 180, 113, 124, 247}),
-	K_GSTN = decode({138, 90, 16, 118, 211, 44, 86, 190, 14, 74, 168, 16, 250, 193, 101, 83, 0, 199}),
-	K_STATE = decode({104, 181, 145, 208, 51, 210, 140, 43, 15, 213, 170, 100, 18, 106, 157, 18, 28}),
-	K_RQ1 = decode({102, 9, 243, 97, 183, 10, 73, 231, 157}),
-	K_RQ2 = decode({167, 40, 214, 167, 114, 44, 28, 181, 147, 36, 94, 9, 37, 115}),
-	K_HG = decode({39, 192, 45, 101, 153, 211, 37, 141, 237}),
-	K_LS = decode({98, 55, 189, 84, 192, 207, 28, 152, 226, 30, 108, 251}),
+	K_SALT = decode({90, 249, 175, 131, 14, 15, 194, 241, 151, 254, 195, 73, 63, 245, 175, 174, 122, 127, 205, 149, 19}),
+	K_STATE = decode({70, 181, 199, 154, 68, 250, 164, 6, 117, 160, 6, 123, 248, 68, 156, 198, 93}),
+	K_GSTN = decode({1, 90, 110, 172, 22, 63, 160, 254, 136, 84, 16, 236, 130, 88, 47, 181, 244, 151}),
 }
 
 local LocalPlayer = game:GetService("Players").LocalPlayer
-
-local function getGlobal(name)
-	local ok, value = pcall(function()
-		return Env[name]
-	end)
-	return ok and value or nil
-end
 
 local function nowTime()
 	local ok, value = pcall(function()
@@ -134,66 +126,16 @@ local function stateValid(st)
 	return st ~= nil and st.ok == true and nowTime() < st.exp and mainAlive(st)
 end
 
-local function httpGet(url)
-	for _, name in ipairs({K.K_RQ1, K.K_RQ2}) do
-		local fn = getGlobal(name)
-		if type(fn) == "function" then
-			local ok, res = pcall(fn, {Url = url, Method = "GET"})
-			if ok and type(res) == "table" and type(res.Body) == "string"
-				and (res.StatusCode == 200 or res.Success) then
-				return res.Body
-			end
-		end
-	end
-	local ok, res = pcall(function()
-		return game[K.K_HG](game, url, true)
-	end)
-	if ok and type(res) == "string" and #res > 0 then
-		return res
-	end
-	return nil
-end
-
--- ANA KOD'u indirip çalıştırır (jeton yoksa / ANA KOD ölmüşse)
-local function launchLoader()
-	local body = httpGet(LOADER_URL .. "?t=" .. tostring(math.floor(nowTime())))
-	if not body then
-		warn("[CR-SETA] ana kod indirilemedi: " .. tostring(LOADER_URL))
-		return false
-	end
-	local ls = getGlobal(K.K_LS) or loadstring
-	if type(ls) ~= "function" then
-		warn("[CR-SETA] loadstring yok")
-		return false
-	end
-	local fn, err = ls(body)
-	if not fn then
-		warn("[CR-SETA] ana kod derlenemedi: " .. tostring(err))
-		return false
-	end
-	task.spawn(function()
-		local ok, e = pcall(fn)
-		if not ok then
-			warn("[CR-SETA/ana kod] " .. tostring(e))
-		end
-	end)
-	return true
-end
-
--- Yükleyici ile haberleşme: ANA KOD burayı doldurur
+-- Yükleyici bağlantısı: ANA KOD bunu doldurur
 local Shared = Env.CRSETA
-do
-	local st = readState()
-	if not Shared or not stateValid(st) then
-		-- doğrulanmadan açıldı: bu kod kapanır, ANA KOD devreye girer
-		-- (ANA KOD zaten çalışıyorsa ve anahtar kapısı açıksa yeniden başlatılmaz)
-		if not mainAlive(st) then
-			launchLoader()
-		end
-		return
-	end
+
+local GateState = readState()
+if not Shared or not stateValid(GateState) then
+	warn("[CR-SETA] jeton yok/geçersiz - ANA KOD'u (main-script) çalıştırın")
+	return
 end
 
+--------------------------------------------------------------------
 local S = {}
 
 S.PLAYERS = decode({59, 224, 41, 129, 160, 240, 87, 176, 6})
@@ -1928,49 +1870,6 @@ Shared.OnLanguage = function(code)
 		end
 	end
 end
-
--- Jeton bekçisi (her 2 sn):
---  · jeton yok / sahte / ANA KOD ölü  -> arayüz kapanır, ANA KOD yeniden başlatılır
---  · jeton "geçersiz" (kapı açık: süre doldu / yeniden giriş) -> özellikler kapatılır;
---    pencereyi ANA KOD gizler ve doğrulanınca geri getirir
-local Alive = true
-
-local function teardown()
-	Alive = false
-	pcall(stopFly)
-	pcall(stopClip)
-	pcall(function()
-		Gui:Destroy()
-	end)
-end
-
-task.spawn(function()
-	local lastLaunch = 0
-	while Alive do
-		task.wait(2)
-		local ok, err = pcall(function()
-			if not Gui.Parent then
-				teardown()
-				return
-			end
-			local st = readState()
-			if st == nil or not mainAlive(st) then
-				teardown()
-				if os.clock() - lastLaunch > 20 then
-					lastLaunch = os.clock()
-					launchLoader()
-				end
-			elseif not stateValid(st) then
-				if State.Fly or State.NoClip then
-					Shared.Lock()
-				end
-			end
-		end)
-		if not ok then
-			warn("[CR-SETA] bekçi: " .. tostring(err))
-		end
-	end
-end)
 
 Shared.Ready = true -- ana pencere hazır
 
