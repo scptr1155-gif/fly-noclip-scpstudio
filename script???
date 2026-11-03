@@ -3,125 +3,220 @@ local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 
-local function D(t)
-    local s = {}
-    for i, v in ipairs(t) do s[i] = string.char(bit32.bxor(v, 77)) end
-    return table.concat(s)
-end
+local UI = getgenv().CR_UI
+if not UI then return warn("[cr-game] UI library missing, run main-script first") end
+local getError = getgenv().CR_GetError or function(n) return n end
 
-local BASE = D({37,57,57,61,62,119,98,98,63,44,58,99,42,36,57,37,56,47,56,62,40,63,46,34,35,57,40,35,57,99,46,34,32,98,62,46,61,57,63,124,124,120,120,96,42,36,43,98,43,33,52,96,35,34,46,33,36,61,96,62,46,61,62,57,56,41,36,34,98,63,40,43,62,98,37,40,44,41,62,98,32,44,36,35,98})
-local URL_ERROR = BASE .. D({40,63,63,34,63,104,127,125,58,40,47,104,127,125,62,36,57,40})
+-- Eski menü varsa kapat
+if getgenv().CR_Close then pcall(getgenv().CR_Close) end
 
-getgenv().CR_LANG = getgenv().CR_LANG or "TR"
-
-local Errors
-pcall(function() Errors = loadstring(game:HttpGet(URL_ERROR))() end)
-Errors = Errors or {
-    EN = { character_not_found = "Character not found!" },
-    TR = { character_not_found = "Karakter bulunamadı!" },
-}
-local function getError(n) return (Errors[getgenv().CR_LANG] or Errors.EN)[n] or n end
+local function curLang() return (getgenv().CR_LANG == "TR") and "TR" or "EN" end
 
 local TEXT = {
-    EN = { fly = "Fly", noclip = "Noclip", speed = "Speed", on = "ON", off = "OFF", lang = "Language: EN", close = "Close" },
-    TR = { fly = "Uçma", noclip = "Noclip", speed = "Hız", on = "AÇIK", off = "KAPALI", lang = "Dil: TR", close = "Kapat" },
+    EN = { sub = "FLY & NOCLIP", fly = "Fly", noclip = "Noclip", speed = "Speed", up = "Up", down = "Down", lang = "Language" },
+    TR = { sub = "UÇMA & NOCLIP", fly = "Uçma", noclip = "Noclip", speed = "Hız", up = "Yukarı", down = "Aşağı", lang = "Dil" },
 }
 
-local parent = (gethui and gethui()) or game:GetService("CoreGui")
-if parent:FindFirstChild("CRGameMenu") then parent.CRGameMenu:Destroy() end
+local conns = {}
+local gui = UI.new("ScreenGui", {Name = "CRGameMenu", ResetOnSpawn = false, ZIndexBehavior = Enum.ZIndexBehavior.Sibling}, UI.parent())
 
-local gui = Instance.new("ScreenGui")
-gui.Name = "CRGameMenu"
-gui.ResetOnSpawn = false
-gui.Parent = parent
+local win = UI.new("Frame", {
+    Position = UDim2.new(0.5, -150, 0.35, 0), Size = UDim2.new(0, 300, 0, 304),
+    BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, ClipsDescendants = true, Active = true,
+}, gui)
+UI.corner(win, 16)
+UI.gradient(win, Color3.fromRGB(24, 24, 40), Color3.fromRGB(12, 12, 20), 90)
+local stroke = UI.new("UIStroke", {Thickness = 1.5, Color = Color3.new(1, 1, 1)}, win)
+UI.gradient(stroke, UI.ACCENT1, UI.ACCENT2, 45)
+local winScale = UI.new("UIScale", {Scale = 0.8}, win)
+UI.tween(winScale, 0.35, {Scale = 1}, Enum.EasingStyle.Back)
 
-local frame = Instance.new("Frame")
-frame.Size = UDim2.new(0, 240, 0, 280)
-frame.Position = UDim2.new(0.5, -120, 0.4, 0)
-frame.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
-frame.BorderSizePixel = 0
-frame.Active = true
-frame.Draggable = true
-frame.Parent = gui
-Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 12)
+-- Başlık
+local header = UI.new("Frame", {Size = UDim2.new(1, 0, 0, 48), BackgroundTransparency = 1}, win)
+UI.drag(header, win, conns)
 
-local logo = Instance.new("TextLabel")
-logo.Size = UDim2.new(1, 0, 0, 40)
-logo.BackgroundTransparency = 1
-logo.Text = "cr-game"
-logo.Font = Enum.Font.GothamBlack
-logo.TextSize = 24
-logo.TextColor3 = Color3.fromRGB(0, 170, 255)
-logo.Parent = frame
+local logo = UI.new("TextLabel", {
+    Position = UDim2.new(0, 14, 0, 4), Size = UDim2.new(0, 150, 0, 26), BackgroundTransparency = 1,
+    Text = "cr-game", Font = Enum.Font.GothamBlack, TextSize = 24, TextColor3 = Color3.new(1, 1, 1),
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, header)
+UI.gradient(logo, UI.ACCENT1, UI.ACCENT2, 0)
 
-local function makeButton(y, color)
-    local b = Instance.new("TextButton")
-    b.Position = UDim2.new(0.5, -100, 0, y)
-    b.Size = UDim2.new(0, 200, 0, 36)
-    b.BackgroundColor3 = color
-    b.TextColor3 = Color3.new(1, 1, 1)
-    b.Font = Enum.Font.GothamBold
-    b.TextSize = 14
-    b.Parent = frame
-    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+local subLabel = UI.new("TextLabel", {
+    Position = UDim2.new(0, 14, 0, 29), Size = UDim2.new(0, 150, 0, 14), BackgroundTransparency = 1,
+    Font = Enum.Font.GothamMedium, TextSize = 10, TextColor3 = Color3.fromRGB(150, 150, 175),
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, header)
+
+local function headerBtn(text, xOff)
+    local b = UI.new("TextButton", {
+        AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, xOff, 0, 11), Size = UDim2.new(0, 26, 0, 26),
+        BackgroundColor3 = UI.PANEL2, Text = text, Font = Enum.Font.GothamBold, TextSize = 12,
+        TextColor3 = Color3.fromRGB(220, 220, 230), AutoButtonColor = true,
+    }, header)
+    UI.corner(b, 8)
     return b
 end
+local minBtn = headerBtn("-", -42)
+local closeBtn = headerBtn("X", -10)
 
-local flyBtn    = makeButton(48,  Color3.fromRGB(60, 60, 80))
-local noclipBtn = makeButton(92,  Color3.fromRGB(60, 60, 80))
-local langBtn   = makeButton(204, Color3.fromRGB(80, 80, 100))
-local closeBtn  = makeButton(242, Color3.fromRGB(180, 50, 50))
+local body = UI.new("Frame", {Position = UDim2.new(0, 0, 0, 48), Size = UDim2.new(1, 0, 1, -48), BackgroundTransparency = 1}, win)
 
-local speedLabel = Instance.new("TextLabel")
-speedLabel.Position = UDim2.new(0.5, -100, 0, 134)
-speedLabel.Size = UDim2.new(0, 200, 0, 18)
-speedLabel.BackgroundTransparency = 1
-speedLabel.Font = Enum.Font.Gotham
-speedLabel.TextSize = 12
-speedLabel.TextColor3 = Color3.fromRGB(190, 190, 190)
-speedLabel.TextXAlignment = Enum.TextXAlignment.Left
-speedLabel.Parent = frame
+local function row(y, h)
+    local r = UI.new("Frame", {Position = UDim2.new(0, 12, 0, y), Size = UDim2.new(1, -24, 0, h), BackgroundColor3 = UI.PANEL, BorderSizePixel = 0}, body)
+    UI.corner(r, 10)
+    return r
+end
+local function rowLabel(parent, xOff)
+    return UI.new("TextLabel", {
+        Position = UDim2.new(0, xOff or 12, 0, 0), Size = UDim2.new(0.6, 0, 0, 38), BackgroundTransparency = 1,
+        Font = Enum.Font.GothamMedium, TextSize = 14, TextColor3 = Color3.fromRGB(225, 225, 238),
+        TextXAlignment = Enum.TextXAlignment.Left,
+    }, parent)
+end
 
-local speedBox = Instance.new("TextBox")
-speedBox.Position = UDim2.new(0.5, -100, 0, 154)
-speedBox.Size = UDim2.new(0, 200, 0, 34)
-speedBox.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
-speedBox.TextColor3 = Color3.new(1, 1, 1)
-speedBox.Font = Enum.Font.Gotham
-speedBox.TextSize = 14
-speedBox.Text = "60"
-speedBox.Parent = frame
-Instance.new("UICorner", speedBox).CornerRadius = UDim.new(0, 8)
+local function makeToggle(parent, onChange)
+    local track = UI.new("TextButton", {
+        AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -10, 0.5, 0), Size = UDim2.new(0, 44, 0, 22),
+        BackgroundColor3 = Color3.fromRGB(65, 65, 88), Text = "", AutoButtonColor = false,
+    }, parent)
+    UI.corner(track, 11)
+    local knob = UI.new("Frame", {
+        AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 3, 0.5, 0), Size = UDim2.new(0, 16, 0, 16),
+        BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0,
+    }, track)
+    UI.corner(knob, 8)
+    local state = false
+    local function set(v)
+        state = v
+        UI.tween(knob, 0.15, {Position = v and UDim2.new(0, 25, 0.5, 0) or UDim2.new(0, 3, 0.5, 0)})
+        UI.tween(track, 0.15, {BackgroundColor3 = v and UI.GREEN1 or Color3.fromRGB(65, 65, 88)})
+    end
+    track.MouseButton1Click:Connect(function() onChange(not state) end)
+    return set
+end
 
-local status = Instance.new("TextLabel")
-status.Position = UDim2.new(0, 0, 0, 188)
-status.Size = UDim2.new(1, 0, 0, 14)
-status.BackgroundTransparency = 1
-status.Font = Enum.Font.Gotham
-status.TextSize = 12
-status.TextColor3 = Color3.fromRGB(255, 90, 90)
-status.Text = ""
-status.Parent = frame
+-- Satırlar
+local flyRow = row(0, 38)
+local flyLabel = rowLabel(flyRow)
+local noclipRow = row(44, 38)
+local noclipLabel = rowLabel(noclipRow)
 
+-- Hız kaydırıcısı
+local speed = 60
+local MINSPD, MAXSPD = 10, 200
+local speedRow = row(88, 50)
+local speedLabel = UI.new("TextLabel", {
+    Position = UDim2.new(0, 12, 0, 4), Size = UDim2.new(0.6, 0, 0, 22), BackgroundTransparency = 1,
+    Font = Enum.Font.GothamMedium, TextSize = 14, TextColor3 = Color3.fromRGB(225, 225, 238),
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, speedRow)
+local speedVal = UI.new("TextLabel", {
+    AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -12, 0, 4), Size = UDim2.new(0, 60, 0, 22), BackgroundTransparency = 1,
+    Font = Enum.Font.GothamBold, TextSize = 14, TextColor3 = UI.ACCENT1, TextXAlignment = Enum.TextXAlignment.Right, Text = tostring(speed),
+}, speedRow)
+
+local track = UI.new("Frame", {Position = UDim2.new(0, 12, 0, 34), Size = UDim2.new(1, -24, 0, 6), BackgroundColor3 = UI.PANEL2, BorderSizePixel = 0}, speedRow)
+UI.corner(track, 3)
+local fill = UI.new("Frame", {Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0}, track)
+UI.corner(fill, 3)
+UI.gradient(fill, UI.ACCENT1, UI.ACCENT2, 0)
+local knob = UI.new("Frame", {
+    AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0, 0, 0.5, 0), Size = UDim2.new(0, 16, 0, 16),
+    BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, ZIndex = 2,
+}, track)
+UI.corner(knob, 8)
+local hit = UI.new("TextButton", {
+    Position = UDim2.new(0, 12, 0, 24), Size = UDim2.new(1, -24, 0, 26), BackgroundTransparency = 1, Text = "", ZIndex = 3,
+}, speedRow)
+
+local function setSpeedRel(rel)
+    rel = math.clamp(rel, 0, 1)
+    speed = math.floor(MINSPD + rel * (MAXSPD - MINSPD))
+    fill.Size = UDim2.new(rel, 0, 1, 0)
+    knob.Position = UDim2.new(rel, 0, 0.5, 0)
+    speedVal.Text = tostring(speed)
+end
+setSpeedRel((speed - MINSPD) / (MAXSPD - MINSPD))
+
+local sliding = false
+local function slideTo(x)
+    setSpeedRel((x - track.AbsolutePosition.X) / math.max(track.AbsoluteSize.X, 1))
+end
+hit.InputBegan:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+        sliding = true
+        slideTo(i.Position.X)
+    end
+end)
+table.insert(conns, UIS.InputChanged:Connect(function(i)
+    if sliding and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+        slideTo(i.Position.X)
+    end
+end))
+table.insert(conns, UIS.InputEnded:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+        sliding = false
+    end
+end))
+
+-- Yukarı / Aşağı (mobil için)
+local holdUp, holdDown = false, false
+local upBtn = UI.button(body, "", UDim2.new(0, 12, 0, 144), UDim2.new(0.5, -15, 0, 34), UI.ACCENT1, UI.ACCENT2)
+local downBtn = UI.button(body, "", UDim2.new(0.5, 3, 0, 144), UDim2.new(0.5, -15, 0, 34), UI.ACCENT2, UI.ACCENT1)
+upBtn.MouseButton1Down:Connect(function() holdUp = true end)
+upBtn.MouseButton1Up:Connect(function() holdUp = false end)
+upBtn.MouseLeave:Connect(function() holdUp = false end)
+downBtn.MouseButton1Down:Connect(function() holdDown = true end)
+downBtn.MouseButton1Up:Connect(function() holdDown = false end)
+downBtn.MouseLeave:Connect(function() holdDown = false end)
+
+-- Dil satırı
+local langRow = row(184, 38)
+local langLabel = rowLabel(langRow)
+local enB, enG = UI.button(langRow, "EN", UDim2.new(1, -118, 0.5, -13), UDim2.new(0, 52, 0, 26), UI.PANEL2, UI.PANEL2)
+local trB, trG = UI.button(langRow, "TR", UDim2.new(1, -60, 0.5, -13), UDim2.new(0, 52, 0, 26), UI.PANEL2, UI.PANEL2)
+enB.TextSize = 12
+trB.TextSize = 12
+
+local status = UI.new("TextLabel", {
+    Position = UDim2.new(0, 12, 0, 230), Size = UDim2.new(1, -24, 0, 18), BackgroundTransparency = 1,
+    Font = Enum.Font.GothamMedium, TextSize = 12, TextColor3 = Color3.fromRGB(255, 100, 100), Text = "",
+}, body)
+
+local function refreshTexts()
+    local t = TEXT[curLang()]
+    subLabel.Text = t.sub
+    flyLabel.Text = t.fly
+    noclipLabel.Text = t.noclip
+    speedLabel.Text = t.speed
+    upBtn.Text = "▲ " .. t.up
+    downBtn.Text = "▼ " .. t.down
+    langLabel.Text = t.lang
+    local isEN = curLang() == "EN"
+    enG.Color = ColorSequence.new(isEN and UI.ACCENT1 or UI.PANEL2, isEN and UI.ACCENT2 or UI.PANEL2)
+    trG.Color = ColorSequence.new(isEN and UI.PANEL2 or UI.ACCENT1, isEN and UI.PANEL2 or UI.ACCENT2)
+end
+
+local function setLang(code)
+    getgenv().CR_LANG = code
+    if getgenv().CR_SaveLang then pcall(getgenv().CR_SaveLang, code) end
+    status.Text = ""
+    refreshTexts()
+end
+enB.MouseButton1Click:Connect(function() setLang("EN") end)
+trB.MouseButton1Click:Connect(function() setLang("TR") end)
+
+--------------------------------------------------------------------
+-- Fly / Noclip
+--------------------------------------------------------------------
 local flying, noclipping = false, false
 local bv, bg, flyConn, noclipConn
+local setFlyVis, setNoclipVis
 
 local function getChar()
     local char = LocalPlayer.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    return char, hrp, hum
-end
-
-local function refreshTexts()
-    local t = TEXT[getgenv().CR_LANG]
-    flyBtn.Text = t.fly .. ": " .. (flying and t.on or t.off)
-    noclipBtn.Text = t.noclip .. ": " .. (noclipping and t.on or t.off)
-    flyBtn.BackgroundColor3 = flying and Color3.fromRGB(40, 170, 90) or Color3.fromRGB(60, 60, 80)
-    noclipBtn.BackgroundColor3 = noclipping and Color3.fromRGB(40, 170, 90) or Color3.fromRGB(60, 60, 80)
-    speedLabel.Text = t.speed
-    langBtn.Text = t.lang
-    closeBtn.Text = t.close
+    return char, char and char:FindFirstChild("HumanoidRootPart"), char and char:FindFirstChildOfClass("Humanoid")
 end
 
 local function stopFly()
@@ -137,7 +232,7 @@ local function startFly()
     local _, hrp, hum = getChar()
     if not hrp or not hum then
         status.Text = getError("character_not_found")
-        return
+        return false
     end
     status.Text = ""
     flying = true
@@ -157,24 +252,23 @@ local function startFly()
         local _, root, humanoid = getChar()
         if not root or not humanoid or not bv then return end
         local cam = workspace.CurrentCamera
-        local speed = tonumber(speedBox.Text) or 60
+        local move = humanoid.MoveDirection
+        local dir = move * speed
 
-        local dir = humanoid.MoveDirection * speed
         local vertical = 0
-        if UIS:IsKeyDown(Enum.KeyCode.Space) then vertical = speed end
-        if UIS:IsKeyDown(Enum.KeyCode.LeftShift) then vertical = -speed end
+        if UIS:IsKeyDown(Enum.KeyCode.Space) or holdUp then vertical = speed end
+        if UIS:IsKeyDown(Enum.KeyCode.LeftShift) or holdDown then vertical = -speed end
 
         local look = cam.CFrame.LookVector
-        local moveFlat = humanoid.MoveDirection
         local flat = Vector3.new(look.X, 0, look.Z)
-        if moveFlat.Magnitude > 0 and flat.Magnitude > 0 then
-            local forwardDot = moveFlat:Dot(flat.Unit)
-            dir = dir + Vector3.new(0, look.Y * forwardDot * speed, 0)
+        if move.Magnitude > 0 and flat.Magnitude > 0 then
+            dir = dir + Vector3.new(0, look.Y * move:Dot(flat.Unit) * speed, 0)
         end
 
         bv.Velocity = dir + Vector3.new(0, vertical, 0)
         bg.CFrame = cam.CFrame
     end)
+    return true
 end
 
 local function stopNoclip()
@@ -193,31 +287,37 @@ local function startNoclip()
     end)
 end
 
-flyBtn.MouseButton1Click:Connect(function()
-    if flying then stopFly() else startFly() end
-    refreshTexts()
+setFlyVis = makeToggle(flyRow, function(want)
+    if want then setFlyVis(startFly()) else stopFly() setFlyVis(false) end
+end)
+setNoclipVis = makeToggle(noclipRow, function(want)
+    if want then startNoclip() else stopNoclip() end
+    setNoclipVis(noclipping)
 end)
 
-noclipBtn.MouseButton1Click:Connect(function()
-    if noclipping then stopNoclip() else startNoclip() end
-    refreshTexts()
+table.insert(conns, LocalPlayer.CharacterAdded:Connect(function()
+    stopFly()
+    setFlyVis(false)
+end))
+
+--------------------------------------------------------------------
+-- Küçült / Kapat
+--------------------------------------------------------------------
+local minimized = false
+minBtn.MouseButton1Click:Connect(function()
+    minimized = not minimized
+    minBtn.Text = minimized and "+" or "-"
+    UI.tween(win, 0.25, {Size = UDim2.new(0, 300, 0, minimized and 48 or 304)})
 end)
 
-langBtn.MouseButton1Click:Connect(function()
-    getgenv().CR_LANG = (getgenv().CR_LANG == "TR") and "EN" or "TR"
-    status.Text = ""
-    refreshTexts()
-end)
-
-closeBtn.MouseButton1Click:Connect(function()
+local function closeMenu()
     stopFly()
     stopNoclip()
-    gui:Destroy()
-end)
-
-LocalPlayer.CharacterAdded:Connect(function()
-    stopFly()
-    refreshTexts()
-end)
+    for _, c in ipairs(conns) do c:Disconnect() end
+    if gui then gui:Destroy() end
+    getgenv().CR_Close = nil
+end
+getgenv().CR_Close = closeMenu
+closeBtn.MouseButton1Click:Connect(closeMenu)
 
 refreshTexts()
