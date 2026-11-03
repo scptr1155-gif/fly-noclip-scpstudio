@@ -1,1 +1,22 @@
-
+return {
+    EN = {
+        code_load_failed       = "Code could not be loaded!",
+        script_load_failed     = "Script could not be loaded!",
+        error_file_failed      = "Error file could not be loaded!",
+        invalid_key            = "Invalid key!",
+        empty_key              = "Please enter a key!",
+        clipboard_unsupported  = "Your executor does not support clipboard!",
+        character_not_found    = "Character not found!",
+        connection_failed      = "Connection failed, check your internet!",
+    },
+    TR = {
+        code_load_failed       = "Kod yüklenemedi!",
+        script_load_failed     = "Script yüklenemedi!",
+        error_file_failed      = "Hata dosyası yüklenemedi!",
+        invalid_key            = "Geçersiz key!",
+        empty_key              = "Lütfen bir key gir!",
+        clipboard_unsupported  = "Executor'ın panoyu desteklemiyor!",
+        character_not_found    = "Karakter bulunamadı!",
+        connection_failed      = "Bağlantı başarısız, internetini kontrol et!",
+    },
+}
