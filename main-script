@@ -1,1763 +1,1177 @@
 --============================================================
---  CR-SETA  ·  ANA KOD (yükleyici + anahtar sistemi)
---  ------------------------------------------------------------
---  BU DOSYA İLK ÇALIŞAN KODDUR (executor'da yalnızca bunu çalıştırın).
+-- CR-SETA · ANA KOD (anahtar sistemi + normal kod yazıcısı)
+-- ------------------------------------------------------------
+-- BU DOSYA İLK ÇALIŞAN KODDUR (yalnızca yürütücüde çalıştırılır).
 --
---  Başlatma sırası:
---    1) Executor kontrolü (HTTP / loadstring)
---    2) Anahtar kapısı (kayıtlı anahtar varsa sessiz giriş)
---    3) İmzalı jeton + kalp atışı (normal kod bunu doğrular)
---    4) Normal kod indirme -> doğrulama -> derleme -> çalıştırma
---    5) 5 saniyede bir anahtar bekçisi (arka plan, yavaşlatmaz)
+-- Akış:
+-- 1) Ortam kontrolü (HTTP + yükleme dizisi)
+-- 2) Anahtar kapısı -> kayıtlı anahtar varsa sessiz, veya pencere
+-- 3) Anahtar onayılanınca imzalı jeton işlemi yapılır (normal kod yetkilendirilir)
+-- 4) Normal kod indirilir -> doğrulanır -> derlenir -> çalıştırılır
+-- 5) Bekçi: jeton kalp atışı + anahtar listesi kontrolü
 --
---  Bölümler:
---    A) Çekirdek (şifre çözücü, ayarlar, yardımcılar, jeton)
---    B) Dil sistemi (TR / EN / DE / FR / ES)
---    C) Ağ katmanı (zaman aşımı + hata sınıflandırma)
---    D) Hata sistemi (18 hata kodu + animasyonlu menüler)
---    E) Anahtar sistemi (kayıt, doğrulama, giriş penceresi)
---    F) Normal kod yükleyici + bekçi + başlangıç
+-- Not: os.clock() Roblox'ta CPU süresidir; zaman aşımı ve kilit
+-- şifreleri için duvar saati (tick/os.time) kullanılır.
 --============================================================
 
---------------------------------------------------------------------
--- A) Çekirdek
---------------------------------------------------------------------
-local MK = {179, 92, 37, 240, 128, 65, 13, 201, 76, 158, 222, 41, 97, 190, 250, 84, 33, 145, 118, 60}
+----------------------------------------------------------------------
+-- 0) Şifre çözücü (normal kodla aynı protokol)
+----------------------------------------------------------------------
+yerel MK = {179, 92, 37, 240, 128, 65, 13, 201, 76, 158, 222, 41, 97, 190, 250, 84, 33, 145, 118, 60}
 
-local function bxor(a, b)
-	if bit32 then
-		return bit32.bxor(a, b)
-	end
-	local result, place = 0, 1
-	while a > 0 or b > 0 do
-		local x, y = a % 2, b % 2
-		if x ~= y then
-			result = result + place
-		end
+yerel fonksiyon bxor(a, b)
+	eğer bit32 ise o zaman
+		bit32.bxor(a, b) döndür
+	son
+	yerel sonuç, yer = 0, 1
+	a > 0 veya b > 0 olduğu sürece
+		yerel x, y = a % 2, b % 2
+		eğer x ≠ y ise o zaman
+			sonuç = sonuç + yer
+		son
 		a = (a - x) / 2
 		b = (b - y) / 2
-		place = place * 2
-	end
-	return result
-end
+		yer = yer * 2
+	son
+	sonuç döndür
+son
 
-local function decode(chunk)
-	local salt, check = chunk[1], chunk[2]
-	local buffer, sum = {}, 0
-	for i = 1, #chunk - 2 do
-		local key = MK[((i + salt) % #MK) + 1]
-		local byte = (chunk[i + 2] - salt - i * 11) % 256
-		local plain = bxor(byte, key)
+yerel fonksiyon decode(chunk)
+	yerel tuz, kontrol = chunk[1], chunk[2]
+	yerel arabellek, toplam = {}, 0
+	i = 1'den #chunk - 2'ye kadar döngü oluştur.
+		yerel anahtar = MK[((i + tuz) % #MK) + 1]
+		yerel bayt = (parça[i + 2] - tuz - i * 11) % 256
+		yerel düz = bxor(bayt, anahtar)
 		buffer[i] = string.char(plain)
-		sum = (sum + plain) % 256
-	end
-	if sum ~= check then
-		error("CR-SETA: cipher integrity check failed", 0)
-	end
-	return table.concat(buffer)
-end
+		toplam = (toplam + düz) % 256
+	son
+	eğer toplam ~= kontrol ise o zaman
+		hata("CR-SETA: şifreleme bütünlüğü kontrolü başarısız oldu", 0)
+	son
+	tabloyu birleştirerek döndür (buffer)
+son
 
-local Players = game:GetService("Players")
-local UIS = game:GetService("UserInputService")
-local TweenService = game:GetService("TweenService")
-local Player = Players.LocalPlayer
-local PlayerGui = Player:WaitForChild("PlayerGui")
+----------------------------------------------------------------------
+-- 1) Ortam
+----------------------------------------------------------------------
+yerel Çevre
+Yapmak
+	yerel tamam, e = pcall(fonksiyon()
+		(getgenv ve getgenv()) veya getfenv() döndür
+	son)
+	Env = (ok ve type(e) == "table") ve e veya _G
+son
 
-local Ease = Enum.EasingStyle
-local EaseDir = Enum.EasingDirection
+yerel fonksiyon getGlobal(name)
+	yerel tamam, değer = pcall(fonksiyon()
+		Env[adı] döndür
+	son)
+	ok ve değer veya nil döndür
+son
 
-local Env
-do
-	local ok, e = pcall(function()
-		return (getgenv and getgenv()) or getfenv()
-	end)
-	Env = (ok and type(e) == "table") and e or _G
-end
-
-local function getGlobal(name)
-	return Env[name]
-end
-
-local K = {
-	K_URL = decode({83, 218, 70, 158, 237, 56, 201, 57, 145, 177, 192, 156, 79, 80, 40, 225, 16, 92, 207, 86, 117, 200, 41, 116, 112, 21, 139, 91, 55, 139, 232, 42, 106, 26, 254, 185, 44, 49, 192, 29, 73, 164, 252, 89, 79, 223, 126, 59, 73}),
-	K_RAW = decode({243, 84, 230, 62, 141, 216, 105, 217, 49, 81, 105, 64, 249, 241, 200, 133, 154, 247, 116, 247, 20, 82, 191, 24, 94, 161, 40, 251, 215, 110, 71, 205, 225, 142, 170, 39, 121, 222, 77, 189, 247, 108, 103, 53, 4, 187, 13, 228, 176, 9, 21, 235, 167, 168, 137, 67, 101, 171, 64, 157, 132, 10, 117, 206, 38, 112, 247, 195, 139, 37, 56, 200, 155, 72, 101, 223, 65, 138, 25, 134, 117, 37, 34, 235, 190}),
-	K_HG = decode({39, 192, 45, 101, 153, 211, 37, 141, 237}),
-	K_RQ1 = decode({102, 9, 243, 97, 183, 10, 73, 231, 157}),
-	K_RQ2 = decode({167, 40, 214, 167, 114, 44, 28, 181, 147, 36, 94, 9, 37, 115}),
-	K_WF = decode({13, 203, 165, 73, 118, 30, 87, 169, 52, 149, 176}),
-	K_RF = decode({19, 60, 223, 98, 120, 211, 48, 125, 193, 23}),
-	K_IF = decode({211, 124, 230, 182, 144, 60, 87, 9}),
-	K_GSTN = decode({138, 90, 16, 118, 211, 44, 86, 190, 14, 74, 168, 16, 250, 193, 101, 83, 0, 199}),
-	K_FILE = decode({25, 4, 146, 234, 121, 64, 250, 163, 164, 70, 27, 180, 228, 92, 186, 16, 133}),
-	K_SALT = decode({94, 249, 160, 199, 59, 143, 238, 103, 232, 213, 139, 126, 72, 33, 236, 110, 167, 180, 113, 124, 247}),
-	K_STATE = decode({104, 181, 145, 208, 51, 210, 140, 43, 15, 213, 170, 100, 18, 106, 157, 18, 28}),
+yerel K = {
+	K_URL = decode({25, 218, 137, 236, 114, 51, 253, 110, 180, 2, 13, 184, 234, 89, 185, 12, 155, 2, 43, 112, 222, 29, 98, 178, 119, 14, 227, 148, 70, 224, 37, 202, 135, 27, 155, 236, 55, 215, 240, 63, 178, 249, 71, 151, 84, 252, 182, 108, 108}),
+	K_RAW = decode({16, 84, 20, 40, 121, 255, 118, 113, 60, 23, 166, 234, 71, 246, 152, 97, 18, 201, 150, 110, 2, 62, 235, 6, 108, 244, 85, 127, 206, 50, 132, 125, 15, 147, 110, 119, 235, 158, 117, 64, 227, 216, 115, 33, 242, 146, 58, 86, 171, 207, 82, 151, 241, 173, 71, 19, 183, 133, 90, 24, 18, 246, 161, 192, 20, 151, 4, 39, 138, 235, 117, 114, 197, 77, 35, 47, 147, 98, 57, 9, 225, 147, 48, 219, 172}),
+	K_HG = decode({22, 192, 217, 32, 108, 191, 219, 129, 77}),
+	K_RQ1 = decode({91, 9, 121, 76, 7, 168, 214, 127, 170}),
+	K_RQ2 = decode({92, 40, 61, 0, 157, 217, 97, 162, 2, 118, 232, 10, 88, 212}),
+	K_WF = decode({36, 203, 21, 62, 154, 23, 148, 169, 10, 104, 171}),
+	K_RF = decode({31, 60, 61, 16, 219, 123, 157, 89, 134, 208}),
+	K_IF = decode({22, 124, 186, 31, 94, 166, 242, 129}),
+	K_GSTN = kod çözme({1, 90, 110, 172, 22, 63, 160, 254, 136, 84, 16, 236, 130, 88, 47, 181, 244, 151}),
+	K_FILE = decode({70, 4, 155, 111, 52, 17, 157, 200, 97, 187, 2, 126, 238, 213, 105, 193, 32}),
+	K_SALT = decode({90, 249, 175, 131, 14, 15, 194, 241, 151, 254, 195, 73, 63, 245, 175, 174, 122, 127, 205, 149, 19}),
+	K_STATE = decode({70, 181, 199, 154, 68, 250, 164, 6, 117, 160, 6, 123, 248, 68, 156, 198, 93}),
+	K_LS = decode({38, 55, 129, 24, 132, 147, 224, 92, 166, 226, 48, 191}),
+	MAIN1 = decode({51, 32, 71, 19, 226, 131, 188, 32, 217, 158, 87, 222, 254, 149, 169, 245, 81, 132, 39, 245, 175, 105, 30, 241, 201, 118, 149, 54, 111, 185, 57, 239, 206, 50, 139, 23, 50, 105, 6, 191, 140, 3, 70, 140, 219, 144, 104, 37, 72, 86, 35, 137, 192, 76, 104, 179, 254, 64, 203, 159, 175, 33, 212, 171, 113, 19, 82, 254, 51, 114, 198, 102, 132, 228, 68, 207, 234, 33, 192, 132, 70, 0, 242, 70, 128, 64, 236, 188, 67, 10, 251}),
+	MAIN2 = decode({52, 70, 21, 216, 117, 177, 77, 194, 148, 40, 197, 230, 52, 102, 233, 50, 150, 8, 218, 182, 97, 34, 246, 174, 104, 138, 70, 84, 182, 69, 155, 137, 28, 131, 203, 204, 111, 239, 185, 128, 60, 60, 134, 209, 110, 36, 25, 77, 147, 224, 137, 163, 238, 29, 170, 232, 59, 188, 158, 96, 193, 218, 176, 104, 16, 73, 227, 28, 106, 252, 158, 126, 210, 53, 134, 132, 39, 167, 111, 69, 242, 185}),
+	MAIN3 = decode({53, 252, 210, 107, 171, 66, 113, 125, 30, 0, 239, 52, 165, 40, 46, 111, 18, 219, 155, 70, 26, 222, 187, 77, 116, 59, 96, 155, 52, 155, 197, 93, 109, 195, 0, 145, 245, 190, 122, 52, 245, 124, 195, 100, 34, 213, 53, 132, 15, 184, 147, 247, 95, 221, 223, 45, 193, 143, 95, 12, 10, 150, 109, 3, 60, 218, 3, 99, 240, 84, 54, 212, 35, 117, 187, 73, 144, 106, 48, 211, 154, 119, 135, 226, 8, 180, 251, 51, 185}),
 }
--- normal kodun adresi (şifreli): .../main/script%3F%3F%3F
-local MAIN_URL = decode({45, 32, 157, 0, 134, 71, 17, 130, 200, 22, 24, 208, 252, 112, 205, 28, 153, 17, 56, 133, 243, 59, 124, 218, 89, 38, 240, 168, 90, 49, 250, 241, 196, 139, 179, 182, 110, 248, 25, 83, 204, 85, 44, 247, 127, 196, 213, 103, 57, 206, 228, 139, 182, 37, 140, 210, 90, 197, 236, 43, 99, 243, 58, 144, 33, 215, 163, 80, 22, 234, 249, 104, 122, 61, 104, 110, 38, 176, 211, 32, 130, 210, 208, 173, 200, 132, 193, 78, 46, 130, 188})
 
-local CFG = {
-	KeyLifetime = 24 * 60 * 60, -- her kod ilk girişten itibaren 24 saat
-	Poll = 5, -- anahtar listesi kontrol aralığı (saniye)
-	PollMax = 60, -- hata sürerken en uzun bekleme
-	OfflineGrace = 120, -- liste bu kadar saniye ulaşılamazsa E15
-	FetchTimeout = 8, -- anahtar listesi isteği zaman aşımı
-	MainTimeout = 15, -- normal kod isteği zaman aşımı
-	ReadyTimeout = 12, -- ana pencere bu sürede hazır olmalı
+----------------------------------------------------------------------
+-- 1b) Servisler
+----------------------------------------------------------------------
+yerel Oyuncular = oyun:GetService("Oyuncular")
+yerel TweenService = oyun:GetService("TweenService")
+yerel Oyuncu = Oyuncular.YerelOyuncu
+yerel PlayerGui = Player:WaitForChild("PlayerGui")
+
+----------------------------------------------------------------------
+-- 2)
+----------------------------------------------------------------------
+yerel CFG = {
+	Anahtar Ömrü = 24 * 60 * 60, -- anahtar ömrü (24 saat)
+	Anket = 10, -- anahtar listesi kontrol aralığı (sn)
+	PollMax = 60, -- hata sürerken en uzun bekleme (sn)
+	OfflineGrace = 120, -- liste bu süreye kadar ulaşılamazsa kilit (sn)
+	HttpTimeout = 8, -- tek HTTP isteği zaman aşımı (sn)
+	MainTimeout = 15, -- normal kod indirme zamanı aşımı (sn)
+	ReadyTimeout = 15, -- normal kod bu durumda olmalı (sn)
 	WrongTries = 5, -- art arda yanlış anahtar sınırı
-	LockSeconds = 20, -- sınır aşılınca kilit süresi
+	LockSeconds = 20, -- sınır aşılınca kilitlenme süresi (sn)
 }
 
-local C = {
+----------------------------------------------------------------------
+-- 3) Zaman · hash · MAC
+----------------------------------------------------------------------
+-- Duvar saati (saniye). os.clock() CPU süresidir, ilerlemeyi beklerken.
+yerel tickFn = rawget(_G, "tick")
+yerel fonksiyon mono()
+	if type(tickFn) == "function" then
+		yerel tamam, v = pcall(tickFn)
+		eğer uygunsa ve type(v) == "sayı" ise
+			dönüş v
+		son
+	son
+	os.time'ı döndürün.
+son
+
+yerel fonksiyon nowTime()
+	yerel tamam, değer = pcall(fonksiyon()
+		çalışma alanını döndür[K.K_GSTN](çalışma alanı)
+	son)
+	Eğer uygunsa ve type(value) == "number" ise, o zaman
+		dönüş değeri
+	son
+	os.time'ı döndürün.
+son
+
+yerel fonksiyon khash(str)
+	yerel h1, h2 = 5381, 52711
+	for i = 1, #str do
+		yerel b = str:byte(i)
+		h1 = (h1 * 33 + b) % 4294967296
+		h2 = (h2 * 131 + b * i) % 4294967291
+	son
+	string.format("%08x%08x", h1, h2) döndür
+son
+
+yerel fonksiyon mac(...)
+	khash(table.concat({...}, "|") .. K.K_SALT) değerini döndürün.
+son
+
+yerel fonksiyon normalizeKey(metin)
+	return ((tostring(text or ""):gsub("%s+", "")):upper())
+son
+
+----------------------------------------------------------------------
+-- 4) Ağları
+----------------------------------------------------------------------
+-- Tek istek: request -> http_request -> game:HttpGet
+yerel fonksiyon rawGet(url)
+	for _, name in ipairs({K.K_RQ1, K.K_RQ2}) do
+		yerel fonksiyon = getGlobal(isim)
+		if type(fn) == "function" then
+			yerel tamam, res = pcall(fn, {Url = url, Method = "GET"})
+			eğer uygunsa ve type(res) == "table" ise
+				yerel kod = tonumber(res.StatusCode) veya (res.Success ve 200 veya nil)
+				Eğer kod 200 ise ve tür (res.Body) "string" ise
+					res.Body'yi döndür, 200
+				son
+				eğer kod o zaman
+					nil döndür, kod
+				son
+			son
+			eğer sorun yoksa ve type(res) == "string" ise ve #res > 0 ise
+				return res, 200
+			son
+		son
+	son
+	yerel okFn, hg = pcall(fonksiyon()
+		oyunu döndür[K.K_HG]
+	son)
+	eğer okFn ve type(hg) == "function" ise
+		yerel tamam, res = pcall(function()
+			return game[K.K_HG](game, url, true)
+		son)
+		eğer sorun yoksa ve type(res) == "string" ise ve #res > 0 ise
+			return res, 200
+		son
+		Eğer uygunsa o zaman
+			yerel mesaj = tostring(res)
+			nil döndür, tonumber(msg:match("HTTP (%d%d%d)")) veya 0
+		son
+	son
+	nil döndür, 0
+son
+
+-- Zaman aşımı: istek thread'te çalışır, ana thread beklemez
+yerel fonksiyon httpGet(url, zaman aşımı)
+	yerel tamamlandı, gövde, durum = yanlış, boş, boş
+	görev.oluştur(fonksiyon()
+		yerel b, s = rawGet(url)
+		vücut, durum = b, s
+		tamamlandı = doğru
+	son)
+	yerel son tarih = mono() + (zaman aşımı veya CFG.HttpTimeout)
+	while not done and mono() < deadline do
+		görev.bekle(0.05)
+	son
+	yapılmadıysa o zaman
+		nil döndür, 0, "zaman aşımı"
+	son
+	dönüş gövdesi, durum
+son
+
+yerel fonksiyon httpCapable()
+	if type(getGlobal(K.K_RQ1)) == "function" or type(getGlobal(K.K_RQ2)) == "function" then
+		true döndür
+	son
+	yerel tamam, fn = pcall(fonksiyon()
+		oyunu döndür[K.K_HG]
+	son)
+	ok döndür ve type(fn) == "function"
+son
+
+yerel fonksiyon loadstringCapable()
+	yerel tamam, fonksiyon = pcall(loadstring, "return 1")
+	ok döndür ve type(fn) == "function"
+son
+
+----------------------------------------------------------------------
+-- 5) Paylaşılan API + jeton
+----------------------------------------------------------------------
+yerel Paylaşımlı = {Dil = "TR", Windows = {}, Hazır = false, Sürüm = 4}
+Env.CRSETA = Shared -- eski çalıştırmaların bekçisi bu satırla açılır durur
+
+fonksiyon Shared.Register(gui)
+	Shared.Windows[#Shared.Windows + 1] = gui
+son
+
+yerel Token = {ok = false, exp = 0}
+Yerel Oturum = {son kullanma tarihi = 0, kod = nil}
+
+yerel fonksiyon stateSig(ok, exp, uid, beat)
+	mac(ok ve "1" veya "0", tostring(exp), tostring(uid), tostring(beat) döndür)
+son
+
+yerel fonksiyon tokenWrite()
+	yerel t = şimdiZaman()
+	Ortam[K.K_DURUM] = {
+		ok = Token.ok,
+		exp = Token.exp,
+		uid = Oyuncu.KullanıcıKimliği,
+		vuruş = t,
+		sig = stateSig(Token.ok, Token.exp, Player.UserId, t),
+	}
+son
+
+yerel fonksiyon tokenSet(ok, exp)
+	Token.ok = ok
+	Token.exp = ok ve exp veya 0
+	tokenWrite()
+son
+
+----------------------------------------------------------------------
+-- 6) Yönerge yardımcıları
+----------------------------------------------------------------------
+yerel C = {
 	bgTop = Color3.fromRGB(18, 25, 40),
 	panel = Color3.fromRGB(21, 29, 45),
-	button = Color3.fromRGB(29, 40, 60),
+	düğme = Color3.fromRGB(29, 40, 60),
 	buttonHover = Color3.fromRGB(42, 57, 84),
-	accent = Color3.fromRGB(0, 160, 255),
+	vurgu = Color3.fromRGB(0, 160, 255),
 	accent2 = Color3.fromRGB(124, 92, 255),
-	text = Color3.fromRGB(238, 244, 255),
-	muted = Color3.fromRGB(140, 158, 184),
-	green = Color3.fromRGB(35, 200, 130),
-	red = Color3.fromRGB(235, 80, 90),
-	amber = Color3.fromRGB(255, 176, 64),
-	discord = Color3.fromRGB(88, 101, 242),
+	metin = Color3.fromRGB(238, 244, 255),
+	soluk = Color3.fromRGB(140, 158, 186),
+	yeşil = Color3.fromRGB(35, 200, 130),
+	kırmızı = Color3.fromRGB(235, 80, 90),
+	kehribar = Color3.fromRGB(255, 176, 64),
+	uyumsuzluk = Color3.fromRGB(88, 101, 242),
 	discordHover = Color3.fromRGB(108, 120, 248),
 }
 
-local function new(class, props, parent)
-	local object = Instance.new(class)
+yerel fonksiyon new(sınıf, özellikler, üst sınıf)
+	yerel nesne = Instance.new(sınıf)
 	for key, value in pairs(props or {}) do
-		object[key] = value
-	end
-	object.Parent = parent
-	return object
-end
+		nesne[anahtar] = değer
+	son
+	nesne.Ebeveyn = ebeveyn
+	nesne döndür
+son
 
-local function tween(object, duration, props, style, direction)
-	local t = TweenService:Create(object, TweenInfo.new(duration, style or Ease.Quad, direction or EaseDir.Out), props)
-	t:Play()
-	return t
-end
+yerel fonksiyon tween(nesne, süre, özellikler, stil, yön)
+	yerel t = TweenService:Create(object, TweenInfo.new(duration, style or Enum.EasingStyle.Quad,
+		yön veya Enum.EasingDirection.Out), özellikler)
+	t:Oynat()
+	geri dön t
+son
 
-local function corner(object, radius)
+yerel fonksiyon köşe(nesne, yarıçap)
 	return new("UICorner", {CornerRadius = UDim.new(0, radius)}, object)
-end
+son
 
-local function stroke(object, color, thickness, transparency)
-	return new("UIStroke", {Color = color, Thickness = thickness or 1, Transparency = transparency or 0}, object)
-end
+yerel fonksiyon vuruşu (nesne, renk, kalınlık, şeffaflık)
+	return new("UIStroke", {
+		Renk = renk,
+		Kalınlık = kalınlık veya 1,
+		Şeffaflık = şeffaflık veya 0,
+	}, nesne)
+son
 
-local function fx(button, radius, hover)
-	local base = button.BackgroundColor3
-	local scale = new("UIScale", {}, button)
-	button.MouseEnter:Connect(function()
-		tween(button, 0.15, {BackgroundColor3 = hover or base:Lerp(Color3.new(1, 1, 1), 0.14)})
-	end)
-	button.MouseLeave:Connect(function()
+yerel fonksiyon fx(düğme, üzerine gelme)
+	yerel taban = düğme.ArkaPlanRengi3
+	yerel ölçek = yeni("UIScale", {}, düğme)
+	düğme.MouseEnter:Connect(function()
+		tween(button, 0.16, {BackgroundColor3 = hover or base:Lerp(Color3.new(1, 1, 1), 0.14)})
+	son)
+	düğme.MouseLeave:Connect(function()
 		tween(button, 0.2, {BackgroundColor3 = base})
-		tween(scale, 0.12, {Scale = 1})
-	end)
-	button.MouseButton1Down:Connect(function()
-		tween(scale, 0.08, {Scale = 0.97})
-	end)
-	button.MouseButton1Up:Connect(function()
-		tween(scale, 0.18, {Scale = 1}, Ease.Back)
-	end)
-end
+		tween(ölçek, 0.12, {Ölçek = 1})
+	son)
+	düğme.MouseButton1Down:Connect(function()
+		tween(ölçek, 0.08, {Ölçek = 0.97})
+	son)
+	düğme.MouseButton1Up:Bağlan(fonksiyon()
+		tween(ölçek, 0.18, {Ölçek = 1}, Enum.EasingStyle.Back)
+	son)
+son
 
-local function nowTime()
-	local ok, value = pcall(function()
-		return workspace[K.K_GSTN](workspace)
-	end)
-	if ok and type(value) == "number" then
-		return value
-	end
-	return os.time()
-end
+yerel fonksiyon copyText(text)
+	yerel fonksiyon = getGlobal("setclipboard") veya getGlobal("toclipboard")
+	return type(fn) == "function" ve pcall(fn, text)
+son
 
-local function khash(str)
-	local h1, h2 = 5381, 52711
-	for i = 1, #str do
-		local b = str:byte(i)
-		h1 = (h1 * 33 + b) % 4294967296
-		h2 = (h2 * 131 + b * i) % 4294967291
-	end
-	return string.format("%08x%08x", h1, h2)
-end
-
-local function mac(...)
-	return khash(table.concat({...}, "|") .. K.K_SALT)
-end
-
---------------------------------------------------------------------
--- İmzalı jeton + kalp atışı
---  · normal kod bu jetonu okuyup doğrular (imza + süre + kalp atışı)
---  · jeton yoksa / sahteyse / yükleyici ölmüşse normal kod kapanır
---------------------------------------------------------------------
-local Token = {ok = false, exp = 0}
-
-local function stateSig(ok, exp, uid, beat)
-	return mac(ok and "1" or "0", tostring(exp), tostring(uid), tostring(beat))
-end
-
-function Token.write()
-	local t = nowTime()
-	Env[K.K_STATE] = {
-		ok = Token.ok, exp = Token.exp, uid = Player.UserId, beat = t,
-		sig = stateSig(Token.ok, Token.exp, Player.UserId, t),
-	}
-end
-
-function Token.set(ok, exp)
-	Token.ok = ok
-	Token.exp = ok and exp or 0
-	Token.write()
-end
-
-local function normalizeKey(text)
-	return ((tostring(text or ""):gsub("%s+", "")):upper())
-end
-
-local function isErr(x)
-	return type(x) == "string" and x:match("^E%d%d$") ~= nil
-end
-
-local function copyText(text)
-	local fn = getGlobal("setclipboard") or getGlobal("toclipboard")
-	return type(fn) == "function" and pcall(fn, text)
-end
-
---------------------------------------------------------------------
--- Paylaşılan API (normal kod ile haberleşme): getgenv().CRSETA
---------------------------------------------------------------------
-local Shared = {Language = "TR", Windows = {}, Ready = false, Version = 3}
-Env.CRSETA = Shared -- eski çalıştırmanın bekçisi bu satırla kendiliğinden durur
-
-function Shared.Register(gui)
-	Shared.Windows[#Shared.Windows + 1] = gui
-end
-
---------------------------------------------------------------------
--- B) Dil sistemi
---------------------------------------------------------------------
-local UI = {
+----------------------------------------------------------------------
+-- 7) Dil sistemi
+----------------------------------------------------------------------
+yerel kullanıcı arayüzü = {
 	TR = {
 		title = "CR-SETA · Giriş", sub = "Devam etmek için anahtar gerekli",
-		placeholder = "Anahtarı yapıştır (örn. 123-456-789-0000)",
-		enter = "GİRİŞ", get = "GET KEY", checking = "Kontrol ediliyor...",
-		empty = "Lütfen bir anahtar yazın.", invalid = "Geçersiz anahtar.",
-		ok = "Doğrulandı · kalan süre: ", copied = "Link kopyalandı! Tarayıcıda açıp anahtarı alın.",
-		manual = "Linki seçip kopyalayın (Ctrl+C)", wait = "Çok fazla deneme. Bekleyin: ",
-		loading = "Yükleniyor...", preparing = "Hata ayrıntıları hazırlanıyor...",
-		sDownload = "Ana script indirme", sValidate = "Dosya doğrulama", sCompile = "Derleme", sRun = "Başlatma",
-		code = "Hata kodu", retry = "Tekrar dene", retryIn = "Otomatik tekrar: ", copy = "Kopyala",
-		copiedBtn = "Kopyalandı!", close = "Kapat", enterKey = "Anahtar gir", getKey = "Anahtar al",
+		yer tutucu = "Anahtarı yapıştırıldı (örn. 123-456-789-0000)",
+		enter = "GİRİŞ", get = "ANAHTAR ALIN", kontrol ediliyor = "Kontrol ediliyor...",
+		empty = "Lütfen bir anahtar yazın.", geçersiz = "Geçersiz anahtar yazın.",
+		ok = "Doğrulandı · kalan süre: ", copy = "Bağlantı kopyalandı! Tarayıcıda çıkarılabilir anahtarı alın.",
+		manual = "Linki kopyalayın (Ctrl+C)", wait = "Çok fazla deneme. Bekleyin: ",
+		yükleniyor = "Yükleniyor...", hazırlanıyor = "Hazırlanıyor...",
+		sDownload = "Normal kod indiriliyor", sValidate = "Dosya doğrulanıyor",
+		sCompile = "Derleniyor", sRun = "Başlatılıyor",
+		netError = "Bağlantı hatası", netHint = "İnternet bağlantınızı kontrol edin.",
+		keyError = "Anahtar hatası", keyHint = "Anahtar dinlememiş olabilir.",
+		exeError = "Yürütücü hatası", exeHint = "HTTP ve loadstring'i destekleyen bir yürütülücünün kullanılması.",
+		code = "Hata kodu", retry = "Tekrar dene", copy = "Kopyala", copyBtn = "Kopyalandı!",
+		close = "Kapat", enterKey = "Anahtar gir", getKey = "Anahtar al",
 		rHttp = "HTTP isteği", rLoad = "loadstring", rClip = "Pano (kopyalama)", rFile = "Dosya kaydı",
 		yes = "Var", no = "Yok", secs = " sn", hm = "%d sa %d dk",
 	},
 	EN = {
-		title = "CR-SETA · Login", sub = "A key is required to continue",
-		placeholder = "Paste your key (e.g. 123-456-789-0000)",
-		enter = "LOGIN", get = "GET KEY", checking = "Checking...",
-		empty = "Please enter a key.", invalid = "Invalid key.",
-		ok = "Verified · time left: ", copied = "Link copied! Open it in your browser to get a key.",
-		manual = "Select the link and copy it (Ctrl+C)", wait = "Too many tries. Wait: ",
-		loading = "Loading...", preparing = "Preparing error details...",
-		sDownload = "Main script download", sValidate = "File validation", sCompile = "Compile", sRun = "Start",
-		code = "Error code", retry = "Try again", retryIn = "Auto retry in: ", copy = "Copy",
-		copiedBtn = "Copied!", close = "Close", enterKey = "Enter key", getKey = "Get key",
-		rHttp = "HTTP requests", rLoad = "loadstring", rClip = "Clipboard", rFile = "File storage",
-		yes = "Yes", no = "No", secs = " s", hm = "%dh %dm",
+		başlık = "CR-SETA · Giriş", alt başlık = "Devam etmek için bir anahtar gereklidir",
+		Yer tutucu = "Anahtarınızı yapıştırın (ör. 123-456-789-0000)",
+		enter = "GİRİŞ", get = "ANAHTAR AL", checking = "Kontrol Ediliyor...",
+		boş = "Lütfen bir tuş girin.", geçersiz = "Geçersiz tuş.",
+		ok = "Doğrulandı · kalan süre: ", copied = "Bağlantı kopyalandı! Anahtarı almak için tarayıcınızda açın.",
+		manual = "Bağlantıyı seçin ve kopyalayın (Ctrl+C)", wait = "Çok fazla deneme yapıldı. Bekleyin: ",
+		loading = "Yükleniyor...", preparing = "Hazırlanıyor...",
+		sDownload = "Ana kod indiriliyor", sValidate = "Dosya doğrulanıyor",
+		sCompile = "Derleniyor", sRun = "Başlıyor",
+		netError = "Bağlantı hatası", netHint = "İnternet bağlantınızı kontrol edin.",
+		keyError = "Tuş hatası", keyHint = "Tuş, tuş listenizde olmayabilir.",
+		exeError = "Yürütücü hatası", exeHint = "HTTP ve loadstring'i destekleyen bir yürütücü kullanın.",
+		kod = "Hata kodu", tekrar dene = "Tekrar dene", kopyala = "Kopyala", kopyalandı düğmesi = "Kopyalandı!",
+		close = "Kapat", enterKey = "Tuşu girin", getKey = "Tuşu alın",
+		rHttp = "HTTP istekleri", rLoad = "dize yükleme", rClip = "Pano", rFile = "Dosya depolama",
+		evet = "Evet", hayır = "Hayır", saniye = "s", hm = "%dh %dm",
 	},
 	DE = {
-		title = "CR-SETA · Anmeldung", sub = "Zum Fortfahren ist ein Schlüssel nötig",
-		placeholder = "Schlüssel einfügen (z. B. 123-456-789-0000)",
-		enter = "LOGIN", get = "GET KEY", checking = "Wird geprüft...",
-		empty = "Bitte einen Schlüssel eingeben.", invalid = "Ungültiger Schlüssel.",
-		ok = "Bestätigt · verbleibend: ", copied = "Link kopiert! Im Browser öffnen, um einen Schlüssel zu holen.",
-		manual = "Link markieren und kopieren (Strg+C)", wait = "Zu viele Versuche. Warten: ",
-		loading = "Wird geladen...", preparing = "Fehlerdetails werden vorbereitet...",
-		sDownload = "Hauptskript laden", sValidate = "Datei prüfen", sCompile = "Kompilieren", sRun = "Starten",
-		code = "Fehlercode", retry = "Erneut versuchen", retryIn = "Automatisch erneut in: ", copy = "Kopieren",
-		copiedBtn = "Kopiert!", close = "Schließen", enterKey = "Schlüssel eingeben", getKey = "Schlüssel holen",
+		title = "CR-SETA · Anmeldung", sub = "Zum Fortfahren ist ein Schlüssel notig",
+		yer tutucu = "Schlüssel einfügen (z. B. 123-456-789-0000)",
+		= "GİRİŞ" girin, get = "ANAHTAR ALIN", kontrol = "Wird geprüft...",
+		empty = "Bitte einen Schlüssel eingeben.", geçersiz = "Ungültiger Schlüssel.",
+		ok = "En iyi sonuç: ", kopyalandı = "Bağlantı kopiert! Tarayıcıyı açın, bir tane açın.",
+		manual = "İşaretleme ve kopyalama bağlantısı (Strg+C)", wait = "Versuche'u etkinleştirin. Uyarı: ",
+		Loading = "Kablolar Geldi...", Hazırlanıyor = "Kablolar Geldi...",
+		sDownload = "Hauptcode şifresi eklendi", sValidate = "Veri şifresi eklendi",
+		sCompile = "Kablo derlemesi", sRun = "Kablo oluşturma işlemi",
+		netError = "Vergi Bağlamaları", netHint = "İnternet Bağlama Sorunu.",
+		keyError = "Schlüsselfehler", keyHint = "Der Schlüssel steht evtl. nicht in deiner List.",
+		exeError = "Yürütücü-Fehler", exeHint = "HTTP ve yükleme dizesi ile bir Yürütücüyü etkinleştirin.",
+		code = "Fehlercode", retry = "Erneut versuchen", copy = "Kopyala", kopyalandıBtn = "Kopyala!",
+		close = "Schlüssel", enterKey = "Schlüssel eingeben", getKey = "Schlüssel delik",
 		rHttp = "HTTP-Anfragen", rLoad = "loadstring", rClip = "Zwischenablage", rFile = "Dateispeicher",
-		yes = "Ja", no = "Nein", secs = " s", hm = "%d Std %d Min",
+		yes = "Ja", no = "Hayır", saniye = " s", hm = "%d Std %d Min",
 	},
 	FR = {
-		title = "CR-SETA · Connexion", sub = "Une clé est requise pour continuer",
-		placeholder = "Collez votre clé (ex. 123-456-789-0000)",
-		enter = "ENTRER", get = "GET KEY", checking = "Vérification...",
-		empty = "Veuillez saisir une clé.", invalid = "Clé invalide.",
-		ok = "Vérifié · temps restant : ", copied = "Lien copié ! Ouvrez-le dans votre navigateur pour obtenir une clé.",
-		manual = "Sélectionnez le lien et copiez-le (Ctrl+C)", wait = "Trop d'essais. Patientez : ",
-		loading = "Chargement...", preparing = "Préparation des détails de l'erreur...",
-		sDownload = "Téléchargement du script", sValidate = "Validation du fichier", sCompile = "Compilation", sRun = "Démarrage",
-		code = "Code d'erreur", retry = "Réessayer", retryIn = "Nouvel essai auto dans : ", copy = "Copier",
-		copiedBtn = "Copié !", close = "Fermer", enterKey = "Saisir la clé", getKey = "Obtenir une clé",
-		rHttp = "Requêtes HTTP", rLoad = "loadstring", rClip = "Presse-papiers", rFile = "Stockage de fichiers",
-		yes = "Oui", no = "Non", secs = " s", hm = "%d h %d min",
+		title = "CR-SETA · Bağlantı", sub = "Devam etmek için bir gereklilik yok",
+		yer tutucu = "Seçtiğiniz bilgileri girin (ör. 123-456-789-0000)",
+		enter = "GİRİŞÇİ", get = "ANAHTAR ALIN", kontrol = "Doğrulama...",
+		empty = "Geçersiz bir açıklama yapın.", geçersiz = "Geçersiz olun.",
+		ok = "Durağan sıcaklığı doğrulayın: ", kopyalandı = "Kopyalayın! Bir veri elde etmek için gezindiğinizde gezinin.",
+		manual = "Seçim ve kopyalama (Ctrl+C)", wait = "Trop d'essais. Patientez : ",
+		yükleme = "Şarj...", hazırlanıyor = "Hazırlık...",
+		sDownload = "Kod yüklemesi", sValidate = "Dosya doğrulaması",
+		sCompile = "Derleme", sRun = "Derleme",
+		netError = "Bağlantı hatası", netHint = "İnternet bağlantınızı doğrulayın.",
+		keyError = "Kilitleme hatası", keyHint = "Kilit listenizde eksik.",
+		exeError = "Yürütme Hatası", exeHint = "Uyumlu bir HTTP yürütücüsü ve yükleme dizesi kullanın.",
+		code = "Hata Kodu", retry = "Yeniden Yazan", kopyala = "Fotokopi Makinesi", kopyalandıBtn = "Kopyala!",
+		close = "Çevir", enterKey = "Kilidi aç", getKey = "Bir şifreyi al",
+		rHttp = "HTTP Gerekiyor", rLoad = "yükleme dizesi", rClip = "Kağıt basımı", rFile = "Dosya stoğu",
+		yes = "Oui", no = "Yok", sn = " s", hm = "%dh %d dk",
 	},
 	ES = {
-		title = "CR-SETA · Acceso", sub = "Se necesita una clave para continuar",
+		title = "CR-SETA · Erişim", sub = "Devam etmek için bir kılavuza ihtiyacınız var",
 		placeholder = "Pega tu clave (p. ej. 123-456-789-0000)",
-		enter = "ENTRAR", get = "GET KEY", checking = "Comprobando...",
-		empty = "Escribe una clave.", invalid = "Clave no válida.",
-		ok = "Verificado · tiempo restante: ", copied = "¡Enlace copiado! Ábrelo en el navegador para obtener una clave.",
-		manual = "Selecciona el enlace y cópialo (Ctrl+C)", wait = "Demasiados intentos. Espera: ",
-		loading = "Cargando...", preparing = "Preparando los detalles del error...",
-		sDownload = "Descarga del script", sValidate = "Validación del archivo", sCompile = "Compilación", sRun = "Inicio",
-		code = "Código de error", retry = "Reintentar", retryIn = "Reintento automático en: ", copy = "Copiar",
-		copiedBtn = "¡Copiado!", close = "Cerrar", enterKey = "Introducir clave", getKey = "Obtener clave",
-		rHttp = "Solicitudes HTTP", rLoad = "loadstring", rClip = "Portapapeles", rFile = "Almacenamiento",
-		yes = "Sí", no = "No", secs = " s", hm = "%d h %d min",
+		enter = "ENTRAR", get = "ANAHTAR ALIN", kontrol = "Comprobando...",
+		empty = "Bir klavuz yazın.", geçersiz = "Geçerli olmayan bir klavuz.",
+		ok = "Doğrulandı · zaman aşımı: ", kopyalandı = "¡Kopyalayın! Bir klavye elde etmek için tarayıcıya girin.",
+		manual = "Bağlama ve kopyalamayı seçin (Ctrl+C)", wait = "İstenilenler. Espera: ",
+		yükleniyor = "Cargando...", hazırlanıyor = "Hazırlık...",
+		sDownload = "Kodu indir", sValidate = "Dosyayı doğrula",
+		sCompile = "Derleme", sRun = "Başlatma",
+		netError = "Bağlantı hatası", netHint = "İnternet bağlantısını gözden geçirin.",
+		keyError = "Klavye hatası", keyHint = "Klavye listede bulunamadı.",
+		exeError = "Ejektör hatası", exeHint = "HTTP ve yükleme dizesi ile uyumlu bir ejektör kullanın.",
+		code = "Hata kodu", retry = "Yeniden Ekle", kopyala = "Kopyala", kopyalandıBtn = "¡Kopyala!",
+		close = "Cerrar", enterKey = "Klaveyi tanıtın", getKey = "Obtener klavesi",
+		rHttp = "Talepler HTTP", rLoad = "loadstring", rClip = "Portapapeles", rFile = "Almacenamiento",
+		yes = "Sí", no = "Hayır", saniye = " s", hm = "%dh %d dk",
 	},
 }
 
-local Lang = {Code = "TR", List = {"TR", "EN", "DE", "FR", "ES"}, Subs = {}}
+local Lang = {Kod = "TR", Liste = {"TR", "EN", "DE", "FR", "ES"}, Subs = {}}
 
-local function T(key)
-	local pack = UI[Lang.Code] or UI.EN
+yerel fonksiyon T(tuş)
+	yerel paket = UI[Lang.Code] veya UI.EN
 	return pack[key] or UI.EN[key] or key
-end
+son
 
-function Lang.Subscribe(fn)
-	local id = {}
+fonksiyon Lang.AboneOl(fn)
+	yerel kimlik = {}
 	Lang.Subs[id] = fn
-	return function()
+	dönüş fonksiyonu()
 		Lang.Subs[id] = nil
-	end
-end
+	son
+son
 
-function Lang.Set(code)
-	if not UI[code] or Lang.Code == code then
-		return
-	end
-	Lang.Code = code
-	Shared.Language = code
+fonksiyon Lang.Set(code)
+	UI[code] veya Lang.Code == code değilse
+		geri dönmek
+	son
+	Dil.Kod = kod
+	Paylaşılan.Dil = kod
 	for _, fn in pairs(Lang.Subs) do
 		pcall(fn)
-	end
-	if Shared.OnLanguage then
+	son
+	Eğer Shared.OnLanguage ise
 		pcall(Shared.OnLanguage, code)
-	end
-end
-Shared.SetLanguage = Lang.Set
+	son
+son
+Paylaşılan.DilSet = DilSet
 
--- Her pencerede kullanılan küçük dil çubuğu
-local function langBar(parent, position)
-	local bar = new("Frame", {
-		Name = "LangBar", Position = position, Size = UDim2.fromOffset(146, 20), BackgroundTransparency = 1,
-	}, parent)
-	new("UIListLayout", {
-		FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder,
-	}, bar)
-	local buttons = {}
-	for index, code in ipairs(Lang.List) do
-		local b = new("TextButton", {
-			LayoutOrder = index, Size = UDim2.fromOffset(26, 20), BackgroundColor3 = C.button,
-			AutoButtonColor = false, Font = Enum.Font.GothamBold, Text = code, TextSize = 10, TextColor3 = C.muted,
-		}, bar)
-		corner(b, 6)
-		b.Activated:Connect(function()
-			Lang.Set(code)
-		end)
-		buttons[code] = b
-	end
-	local function paint()
-		for code, b in pairs(buttons) do
-			local on = code == Lang.Code
-			tween(b, 0.15, {BackgroundColor3 = on and C.accent or C.button, TextColor3 = on and C.text or C.muted})
-		end
-	end
-	paint()
-	local unsub = Lang.Subscribe(paint)
-	bar.Destroying:Connect(unsub)
-	return bar
-end
+yerel fonksiyon formatKalan(saniye)
+	saniye = math.max(0, math.floor(saniye))
+	string.format(T("hm"), math.floor(seconds / 3600), math.floor((seconds % 3600) / 60)) değerini döndürün.
+son
 
-local function formatRemaining(seconds)
-	seconds = math.max(0, math.floor(seconds))
-	return string.format(T("hm"), math.floor(seconds / 3600), math.floor((seconds % 3600) / 60))
-end
+----------------------------------------------------------------------
+-- 8) Anahtar listesi + sürekliliği
+----------------------------------------------------------------------
+Yerel Anahtarlar = {sonGövde = nil, sonAnahtarlar = nil}
 
---------------------------------------------------------------------
--- C) Ağ katmanı
---------------------------------------------------------------------
-local Net = {}
-
-local function rawGet(url)
-	local status, lastErr
-	for _, name in ipairs({K.K_RQ1, K.K_RQ2}) do
-		local fn = getGlobal(name)
-		if type(fn) == "function" then
-			local ok, res = pcall(fn, {Url = url, Method = "GET"})
-			if ok and type(res) == "table" then
-				local code = tonumber(res.StatusCode) or (res.Success and 200 or nil)
-				if code == 200 and type(res.Body) == "string" then
-					return res.Body, 200
-				end
-				if code then
-					return nil, code, tostring(res.StatusMessage or ""), res.Headers
-				end
-			else
-				lastErr = tostring(res)
-			end
-		end
-	end
-	local okFn, hg = pcall(function()
-		return game[K.K_HG]
-	end)
-	if okFn and type(hg) == "function" then
-		local ok, res = pcall(function()
-			return game[K.K_HG](game, url, true)
-		end)
-		if ok and type(res) == "string" then
-			return res, 200
-		end
-		local msg = tostring(res)
-		return nil, tonumber(msg:match("HTTP (%d%d%d)")) or tonumber(msg:match("(%d%d%d)")), msg
-	end
-	return nil, status, lastErr
-end
-
--- Takılan isteği beklemeden zaman aşımına çevirir (sistemi dondurmaz)
-local function withTimeout(seconds, fn, ...)
-	local done, r1, r2, r3, r4 = false
-	local args = table.pack(...)
-	task.spawn(function()
-		local ok, a, b, c, d = pcall(fn, table.unpack(args, 1, args.n))
-		if ok then
-			r1, r2, r3, r4 = a, b, c, d
-		else
-			r1, r2, r3 = nil, nil, tostring(a)
-		end
-		done = true
-	end)
-	local deadline = os.clock() + seconds
-	while not done and os.clock() < deadline do
-		task.wait(0.05)
-	end
-	if not done then
-		return nil, "timeout"
-	end
-	return r1, r2, r3, r4
-end
-
-function Net.fetch(url, timeout)
-	local body, status, err, headers = withTimeout(timeout or 10, rawGet, url)
-	if status == "timeout" then
-		return nil, 0, "timeout"
-	end
-	return body, status, err, headers
-end
-
-function Net.classify(status, err)
-	status = tonumber(status)
-	if status == 404 or status == 410 then
-		return "E05"
-	end
-	if status == 429 then
-		return "E04"
-	end
-	if status and (status == 403 or status >= 500) then
-		return "E06"
-	end
-	return "E03"
-end
-
-function Net.retryAfter(headers)
-	if type(headers) ~= "table" then
-		return nil
-	end
-	return tonumber(headers["Retry-After"] or headers["retry-after"])
-end
-
-function Net.caps()
-	local caps = {}
-	caps.http = type(getGlobal(K.K_RQ1)) == "function" or type(getGlobal(K.K_RQ2)) == "function"
-	if not caps.http then
-		local ok, fn = pcall(function()
-			return game[K.K_HG]
-		end)
-		caps.http = ok and type(fn) == "function"
-	end
-	local ok, fn = pcall(loadstring, "return 1")
-	caps.loadstring = ok and type(fn) == "function"
-	caps.clipboard = type(getGlobal("setclipboard")) == "function" or type(getGlobal("toclipboard")) == "function"
-	caps.files = type(getGlobal(K.K_WF)) == "function" and type(getGlobal(K.K_RF)) == "function"
-		and type(getGlobal(K.K_IF)) == "function"
-	return caps
-end
-
---------------------------------------------------------------------
--- D) Hata sistemi
---
---  Hata kodları ve NE ZAMAN oluşurlar:
---   E01 executor'da HTTP fonksiyonu yok            (açılışta)
---   E02 executor'da loadstring yok / kapalı        (açılışta)
---   E03 sunucuya ulaşılamadı / zaman aşımı         (her istekte)
---   E04 HTTP 429 çok fazla istek                   (her istekte)
---   E05 HTTP 404/410 dosya bulunamadı              (her istekte)
---   E06 HTTP 403 / 5xx sunucu hatası               (her istekte)
---   E07 normal kod indirilemedi (3 deneme sonra)   (normal kod indirirken)
---   E08 normal kod geçersiz (boş / HTML / kısa)    (indirme sonrası doğrulama)
---   E09 normal kod derlenemedi (sözdizimi)         (loadstring)
---   E10 normal kod çalışırken hata verdi           (çalıştırma / ana pencere)
---   E11 anahtar listesi okunamadı (boş / HTML)     (anahtar listesi)
---   E12 anahtar listeden kaldırıldı                (giriş veya 5 sn bekçi)
---   E13 anahtarın 24 saati doldu                   (giriş veya 5 sn bekçi)
---   E14 art arda 5 yanlış anahtar -> kısa kilit    (giriş penceresi)
---   E15 anahtar listesine 2 dk ulaşılamadı         (5 sn bekçi)
---   E16 ana pencere 12 sn içinde hazır olmadı      (çalıştırma sonrası)
---   E17 arayüz (PlayerGui) oluşturulamadı          (açılışta)
---   E18 beklenmeyen hata                           (her yerde)
---------------------------------------------------------------------
-local ORANGE = Color3.fromRGB(255, 122, 60)
-
-local ERR = {
-	E01 = {tpl = "executor", color = ORANGE, icon = "!", T = {
-		TR = {"HTTP desteği yok", "Executor'ınız internetten dosya indiremiyor (request / HttpGet yok). HTTP destekleyen bir executor kullanın."},
-		EN = {"No HTTP support", "Your executor cannot download files (no request / HttpGet). Use an executor that supports HTTP."},
-		DE = {"Keine HTTP-Unterstützung", "Dein Executor kann keine Dateien herunterladen (kein request / HttpGet). Nutze einen Executor mit HTTP-Unterstützung."},
-		FR = {"HTTP non pris en charge", "Votre exécuteur ne peut pas télécharger de fichiers (ni request ni HttpGet). Utilisez-en un qui gère le HTTP."},
-		ES = {"Sin soporte HTTP", "Tu ejecutor no puede descargar archivos (sin request / HttpGet). Usa uno que admita HTTP."},
-	}},
-	E02 = {tpl = "executor", color = ORANGE, icon = "!", T = {
-		TR = {"loadstring desteklenmiyor", "Ana script çalıştırılamıyor çünkü executor loadstring'i desteklemiyor veya kapalı."},
-		EN = {"loadstring unavailable", "The main script cannot run because your executor does not support loadstring or it is disabled."},
-		DE = {"loadstring nicht verfügbar", "Das Hauptskript kann nicht laufen, weil dein Executor loadstring nicht unterstützt oder es deaktiviert ist."},
-		FR = {"loadstring indisponible", "Le script principal ne peut pas démarrer car votre exécuteur ne gère pas loadstring ou l'a désactivé."},
-		ES = {"loadstring no disponible", "El script principal no puede ejecutarse porque tu ejecutor no admite loadstring o está desactivado."},
-	}},
-	E03 = {tpl = "network", color = C.amber, icon = "!", auto = 10, T = {
-		TR = {"Sunucuya ulaşılamadı", "İstek zaman aşımına uğradı veya internet bağlantısı yok. Bağlantınızı kontrol edin, otomatik yeniden denenecek."},
-		EN = {"Server unreachable", "The request timed out or there is no internet connection. Check your connection; it will retry automatically."},
-		DE = {"Server nicht erreichbar", "Die Anfrage ist abgelaufen oder es gibt keine Internetverbindung. Prüfe deine Verbindung; es wird automatisch erneut versucht."},
-		FR = {"Serveur injoignable", "La requête a expiré ou aucune connexion Internet. Vérifiez votre connexion ; un nouvel essai aura lieu automatiquement."},
-		ES = {"Servidor inaccesible", "La solicitud agotó el tiempo o no hay conexión a Internet. Revisa tu conexión; se reintentará automáticamente."},
-	}},
-	E04 = {tpl = "network", color = C.amber, icon = "!", auto = 60, T = {
-		TR = {"Çok fazla istek (429)", "Sunucu kısa sürede çok fazla istek aldığı için engelledi. Bir süre beklenip otomatik yeniden denenecek."},
-		EN = {"Too many requests (429)", "The server blocked requests sent too quickly. It will wait a while and retry automatically."},
-		DE = {"Zu viele Anfragen (429)", "Der Server hat zu schnell gesendete Anfragen blockiert. Es wird kurz gewartet und automatisch erneut versucht."},
-		FR = {"Trop de requêtes (429)", "Le serveur a bloqué des requêtes trop rapprochées. Une pause sera faite avant un nouvel essai automatique."},
-		ES = {"Demasiadas solicitudes (429)", "El servidor bloqueó solicitudes enviadas demasiado rápido. Se esperará un poco y se reintentará automáticamente."},
-	}},
-	E05 = {tpl = "script", color = C.red, icon = "X", T = {
-		TR = {"Dosya bulunamadı (404)", "İstenen adres yok. Dosya adı veya GitHub adresi yanlış ya da dosya silinmiş olabilir."},
-		EN = {"File not found (404)", "The requested address does not exist. The file name or GitHub URL may be wrong, or the file was removed."},
-		DE = {"Datei nicht gefunden (404)", "Die angeforderte Adresse existiert nicht. Dateiname oder GitHub-URL sind falsch oder die Datei wurde entfernt."},
-		FR = {"Fichier introuvable (404)", "L'adresse demandée n'existe pas. Le nom du fichier ou l'URL GitHub est incorrect, ou le fichier a été supprimé."},
-		ES = {"Archivo no encontrado (404)", "La dirección solicitada no existe. El nombre del archivo o la URL de GitHub es incorrecta, o el archivo fue eliminado."},
-	}},
-	E06 = {tpl = "network", color = C.amber, icon = "!", auto = 30, T = {
-		TR = {"Sunucu hatası", "Sunucu erişimi reddetti veya geçici bir hata verdi (403 / 5xx). Biraz sonra otomatik yeniden denenecek."},
-		EN = {"Server error", "The server denied access or returned a temporary error (403 / 5xx). It will retry automatically shortly."},
-		DE = {"Serverfehler", "Der Server hat den Zugriff verweigert oder einen vorübergehenden Fehler gemeldet (403 / 5xx). Gleich wird automatisch erneut versucht."},
-		FR = {"Erreur du serveur", "Le serveur a refusé l'accès ou renvoyé une erreur temporaire (403 / 5xx). Un nouvel essai aura lieu bientôt."},
-		ES = {"Error del servidor", "El servidor denegó el acceso o devolvió un error temporal (403 / 5xx). Se reintentará automáticamente en breve."},
-	}},
-	E07 = {tpl = "script", color = C.red, icon = "X", T = {
-		TR = {"Ana kaynak yüklenemedi", "Ana script indirilemedi (3 deneme sonrası). Adres erişilebilir değil ya da bağlantı sürekli kopuyor."},
-		EN = {"Main source failed to load", "The main script could not be downloaded (after 3 attempts). The address is unreachable or the connection keeps dropping."},
-		DE = {"Hauptquelle nicht geladen", "Das Hauptskript konnte nach 3 Versuchen nicht heruntergeladen werden. Die Adresse ist nicht erreichbar oder die Verbindung bricht ab."},
-		FR = {"Source principale non chargée", "Le script principal n'a pas pu être téléchargé (après 3 essais). L'adresse est injoignable ou la connexion est instable."},
-		ES = {"No se cargó la fuente principal", "No se pudo descargar el script principal (tras 3 intentos). La dirección no es accesible o la conexión se interrumpe."},
-	}},
-	E08 = {tpl = "script", color = C.red, icon = "X", T = {
-		TR = {"Ana dosya yüklenmedi", "Dosya indi ama geçersiz: boş, çok kısa ya da Lua yerine bir web sayfası geldi."},
-		EN = {"Main file not loaded", "The file downloaded but is invalid: empty, too short, or a web page instead of Lua code."},
-		DE = {"Hauptdatei nicht geladen", "Die Datei wurde geladen, ist aber ungültig: leer, zu kurz oder eine Webseite statt Lua-Code."},
-		FR = {"Fichier principal non chargé", "Le fichier est téléchargé mais invalide : vide, trop court, ou une page web au lieu de code Lua."},
-		ES = {"Archivo principal no cargado", "El archivo se descargó pero no es válido: vacío, demasiado corto o una página web en lugar de código Lua."},
-	}},
-	E09 = {tpl = "script", color = C.red, icon = "X", T = {
-		TR = {"Ana script derlenemedi", "Dosyada bir sözdizimi hatası var. Ayrıntılardaki satır numarasına bakın."},
-		EN = {"Main script failed to compile", "The file contains a syntax error. Check the line number in the details."},
-		DE = {"Hauptskript nicht kompiliert", "Die Datei enthält einen Syntaxfehler. Siehe Zeilennummer in den Details."},
-		FR = {"Échec de compilation du script", "Le fichier contient une erreur de syntaxe. Consultez le numéro de ligne dans les détails."},
-		ES = {"El script principal no compiló", "El archivo contiene un error de sintaxis. Revisa el número de línea en los detalles."},
-	}},
-	E10 = {tpl = "script", color = C.red, icon = "X", T = {
-		TR = {"Ana script çalışırken hata verdi", "Script başladı ama çalışırken bir hata oluştu. Ayrıntıları kopyalayıp geliştiriciye gönderin."},
-		EN = {"Main script crashed", "The script started but an error occurred while running. Copy the details and send them to the developer."},
-		DE = {"Hauptskript abgestürzt", "Das Skript wurde gestartet, aber beim Ausführen trat ein Fehler auf. Kopiere die Details und sende sie dem Entwickler."},
-		FR = {"Le script principal a planté", "Le script a démarré mais une erreur s'est produite. Copiez les détails et envoyez-les au développeur."},
-		ES = {"El script principal falló", "El script se inició pero ocurrió un error al ejecutarse. Copia los detalles y envíalos al desarrollador."},
-	}},
-	E11 = {tpl = "network", color = C.amber, icon = "!", auto = 15, T = {
-		TR = {"Anahtar listesi okunamadı", "Liste boş ya da düz metin değil (bir web sayfası geldi). Birazdan otomatik yeniden denenecek."},
-		EN = {"Key list unreadable", "The list is empty or not plain text (a web page was returned). It will retry automatically shortly."},
-		DE = {"Schlüsselliste nicht lesbar", "Die Liste ist leer oder kein reiner Text (eine Webseite kam zurück). Gleich wird automatisch erneut versucht."},
-		FR = {"Liste de clés illisible", "La liste est vide ou n'est pas du texte brut (une page web a été renvoyée). Nouvel essai automatique bientôt."},
-		ES = {"Lista de claves ilegible", "La lista está vacía o no es texto plano (se devolvió una página web). Se reintentará automáticamente."},
-	}},
-	E12 = {tpl = "key", color = C.accent2, icon = "K", T = {
-		TR = {"Anahtar iptal edildi", "Anahtarınız listeden kaldırıldı. Devam etmek için yeni bir anahtar girin."},
-		EN = {"Key revoked", "Your key was removed from the list. Enter a new key to continue."},
-		DE = {"Schlüssel widerrufen", "Dein Schlüssel wurde aus der Liste entfernt. Gib einen neuen Schlüssel ein, um fortzufahren."},
-		FR = {"Clé révoquée", "Votre clé a été retirée de la liste. Saisissez une nouvelle clé pour continuer."},
-		ES = {"Clave revocada", "Tu clave fue eliminada de la lista. Introduce una nueva clave para continuar."},
-	}},
-	E13 = {tpl = "key", color = C.accent2, icon = "K", T = {
-		TR = {"Anahtar süresi doldu", "Bu anahtarın 24 saatlik kullanım süresi bitti. Yeni bir anahtar alın."},
-		EN = {"Key expired", "This key's 24-hour period is over. Get a new key."},
-		DE = {"Schlüssel abgelaufen", "Die 24-Stunden-Frist dieses Schlüssels ist vorbei. Hole dir einen neuen Schlüssel."},
-		FR = {"Clé expirée", "La période de 24 heures de cette clé est terminée. Obtenez une nouvelle clé."},
-		ES = {"Clave caducada", "El periodo de 24 horas de esta clave terminó. Obtén una nueva clave."},
-	}},
-	E14 = {tpl = "key", color = C.accent2, icon = "K", T = {
-		TR = {"Çok fazla yanlış deneme", "Art arda 5 geçersiz anahtar girildi. Giriş kısa süreliğine kilitlendi."},
-		EN = {"Too many wrong tries", "5 invalid keys in a row. Login is locked for a short time."},
-		DE = {"Zu viele Fehlversuche", "5 ungültige Schlüssel hintereinander. Die Anmeldung ist kurz gesperrt."},
-		FR = {"Trop d'essais erronés", "5 clés invalides d'affilée. La connexion est verrouillée un court instant."},
-		ES = {"Demasiados intentos fallidos", "5 claves inválidas seguidas. El acceso está bloqueado por un momento."},
-	}},
-	E15 = {tpl = "network", color = C.amber, icon = "!", auto = 10, T = {
-		TR = {"Anahtar kontrolü yapılamıyor", "Anahtar listesine 2 dakikadır ulaşılamıyor. Bağlantı gelince otomatik devam edilecek."},
-		EN = {"Key check unavailable", "The key list has been unreachable for 2 minutes. It will continue automatically once the connection is back."},
-		DE = {"Schlüsselprüfung nicht möglich", "Die Schlüsselliste ist seit 2 Minuten nicht erreichbar. Es geht automatisch weiter, sobald die Verbindung wieder da ist."},
-		FR = {"Vérification de clé impossible", "La liste de clés est injoignable depuis 2 minutes. La suite reprendra automatiquement dès le retour de la connexion."},
-		ES = {"No se puede comprobar la clave", "La lista de claves lleva 2 minutos inaccesible. Continuará automáticamente cuando vuelva la conexión."},
-	}},
-	E16 = {tpl = "generic", color = C.accent, icon = "!", T = {
-		TR = {"Ana pencere oluşturulamadı", "Script çalıştı ama arayüz 12 saniye içinde hazır olmadı. Dosya eski bir sürüm olabilir."},
-		EN = {"Main window not created", "The script ran but its interface was not ready within 12 seconds. The file may be an outdated version."},
-		DE = {"Hauptfenster nicht erstellt", "Das Skript lief, aber die Oberfläche war nach 12 Sekunden nicht bereit. Die Datei ist evtl. veraltet."},
-		FR = {"Fenêtre principale non créée", "Le script s'est exécuté mais l'interface n'était pas prête après 12 secondes. Le fichier est peut-être obsolète."},
-		ES = {"No se creó la ventana principal", "El script se ejecutó pero la interfaz no estuvo lista en 12 segundos. El archivo puede ser una versión antigua."},
-	}},
-	E17 = {tpl = "generic", color = C.accent, icon = "!", T = {
-		TR = {"Arayüz oluşturulamadı", "Oyuncu arayüzü (PlayerGui) bulunamadı veya pencere eklenemedi. Oyuna yeniden girin."},
-		EN = {"Interface could not be created", "PlayerGui was not found or the window could not be added. Rejoin the game."},
-		DE = {"Oberfläche nicht erstellt", "PlayerGui wurde nicht gefunden oder das Fenster konnte nicht hinzugefügt werden. Tritt dem Spiel erneut bei."},
-		FR = {"Interface non créée", "PlayerGui est introuvable ou la fenêtre n'a pas pu être ajoutée. Rejoignez la partie."},
-		ES = {"No se pudo crear la interfaz", "No se encontró PlayerGui o no se pudo añadir la ventana. Vuelve a entrar al juego."},
-	}},
-	E18 = {tpl = "generic", color = C.accent, icon = "!", T = {
-		TR = {"Beklenmeyen hata", "Bilinmeyen bir sorun oluştu. Ayrıntıları kopyalayıp geliştiriciye iletin."},
-		EN = {"Unexpected error", "An unknown problem occurred. Copy the details and send them to the developer."},
-		DE = {"Unerwarteter Fehler", "Ein unbekanntes Problem ist aufgetreten. Kopiere die Details und sende sie dem Entwickler."},
-		FR = {"Erreur inattendue", "Un problème inconnu est survenu. Copiez les détails et envoyez-les au développeur."},
-		ES = {"Error inesperado", "Ocurrió un problema desconocido. Copia los detalles y envíalos al desarrollador."},
-	}},
-}
-
--- Hata menüsü şablonları: farklı hata türleri farklı menü açar
-local SIZES = {network = {400, 310}, script = {400, 430}, key = {400, 300}, executor = {400, 360}, generic = {400, 340}}
-
--- Açık pencereleri kapatma / geri getirme
-local Windows = {hidden = {}}
-
-function Windows.Hide()
-	local list = Shared.Windows
-	for i = #list, 1, -1 do
-		local g = list[i]
-		if typeof(g) ~= "Instance" or not g.Parent then
-			table.remove(list, i)
-		elseif g.Enabled then
-			Windows.hidden[#Windows.hidden + 1] = g
-			g.Enabled = false
-		end
-	end
-	local toast = PlayerGui:FindFirstChild("crseta_toast")
-	if toast then
-		toast:Destroy()
-	end
-end
-
-function Windows.Restore()
-	for _, g in ipairs(Windows.hidden) do
-		if g.Parent then
-			g.Enabled = true
-		end
-	end
-	Windows.hidden = {}
-end
-
-local Errors = {Session = nil, Showing = false}
-
-local function dotColor(state)
-	if state == "ok" or state == "yes" then
-		return C.green
-	elseif state == "fail" or state == "no" then
-		return C.red
-	end
-	return C.muted
-end
-
--- Oturum: karartma + kutu + yükleniyor katmanı
-local function openSession()
-	local s = {unsubs = {}}
-	s.gui = new("ScreenGui", {Name = "crseta_error", ResetOnSpawn = false, DisplayOrder = 300, IgnoreGuiInset = true}, PlayerGui)
-	new("TextButton", {Size = UDim2.fromOffset(1, 1), BackgroundTransparency = 1, Text = "", Modal = true}, s.gui)
-	s.dim = new("Frame", {
-		Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(0, 0, 0),
-		BackgroundTransparency = 1, BorderSizePixel = 0, Active = true,
-	}, s.gui)
-	tween(s.dim, 0.3, {BackgroundTransparency = 0.35})
-	Windows.Hide() -- arkadaki pencerelerimizi kapat
-	task.wait(0.3)
-
-	s.box = new("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(56, 56),
-		BackgroundColor3 = C.bgTop, BackgroundTransparency = 1, BorderSizePixel = 0, ClipsDescendants = true,
-	}, s.gui)
-	s.boxCorner = corner(s.box, 14)
-	local boxStroke = stroke(s.box, Color3.new(1, 1, 1), 1.6, 0.1)
-	s.boxGrad = new("UIGradient", {Color = ColorSequence.new(C.accent)}, boxStroke)
-	TweenService:Create(s.boxGrad, TweenInfo.new(4, Ease.Linear, EaseDir.In, -1), {Rotation = 360}):Play()
-	s.pop = new("UIScale", {Scale = 0.3}, s.box)
-
-	s.loading = new("CanvasGroup", {Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0}, s.box)
-	s.spinner = new("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.fromOffset(24, 24), BackgroundTransparency = 1,
-	}, s.loading)
-	corner(s.spinner, 12)
-	local spStroke = stroke(s.spinner, Color3.new(1, 1, 1), 3, 0)
-	s.spGrad = new("UIGradient", {
-		Color = ColorSequence.new(C.accent),
-		Transparency = NumberSequence.new({
-			NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(0.6, 0),
-			NumberSequenceKeypoint.new(0.601, 1), NumberSequenceKeypoint.new(1, 1),
-		}),
-	}, spStroke)
-	TweenService:Create(s.spGrad, TweenInfo.new(0.9, Ease.Linear, EaseDir.In, -1), {Rotation = 360}):Play()
-
-	s.barText = new("TextLabel", {
-		AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 58, 0.5, 0), Size = UDim2.new(1, -72, 0, 24),
-		BackgroundTransparency = 1, Font = Enum.Font.GothamSemibold, TextSize = 14, TextColor3 = C.text,
-		TextXAlignment = Enum.TextXAlignment.Left, TextTransparency = 1,
-	}, s.loading)
-	s.bigText = new("TextLabel", {
-		AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 22), Size = UDim2.new(1, -40, 0, 24),
-		BackgroundTransparency = 1, Font = Enum.Font.GothamBold, TextSize = 17, TextColor3 = C.text, TextTransparency = 1,
-	}, s.loading)
-	s.subText = new("TextLabel", {
-		AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 48), Size = UDim2.new(1, -40, 0, 18),
-		BackgroundTransparency = 1, Font = Enum.Font.Gotham, TextSize = 12, TextColor3 = C.muted, TextTransparency = 1,
-	}, s.loading)
-	local function texts()
-		s.barText.Text, s.bigText.Text, s.subText.Text = T("loading"), T("loading"), T("preparing")
-	end
-	texts()
-	s.unsubs[#s.unsubs + 1] = Lang.Subscribe(texts)
-	return s
-end
-
-local function goBar(s)
-	tween(s.bigText, 0.15, {TextTransparency = 1})
-	tween(s.subText, 0.15, {TextTransparency = 1})
-	tween(s.box, 0.4, {Size = UDim2.fromOffset(300, 46)}, Ease.Quint)
-	tween(s.boxCorner, 0.4, {CornerRadius = UDim.new(0, 23)}, Ease.Quint)
-	tween(s.spinner, 0.4, {Position = UDim2.new(0, 30, 0.5, 0)}, Ease.Quint)
-	tween(s.barText, 0.35, {TextTransparency = 0})
-end
-
-local function goBig(s, W, H)
-	tween(s.barText, 0.15, {TextTransparency = 1})
-	tween(s.box, 0.5, {Size = UDim2.fromOffset(W, H)}, Ease.Quint)
-	tween(s.boxCorner, 0.5, {CornerRadius = UDim.new(0, 18)}, Ease.Quint)
-	tween(s.spinner, 0.5, {Position = UDim2.new(0.5, 0, 0.5, -20)}, Ease.Quint)
-	task.delay(0.25, function()
-		tween(s.bigText, 0.3, {TextTransparency = 0})
-		tween(s.subText, 0.3, {TextTransparency = 0})
-	end)
-end
-
-local function collapse(s)
-	if s.content then
-		tween(s.content, 0.2, {GroupTransparency = 1})
-	end
-	tween(s.loading, 0.2, {GroupTransparency = 1})
-	task.wait(0.2)
-	tween(s.box, 0.3, {Size = UDim2.fromOffset(56, 56), BackgroundTransparency = 1}, Ease.Quint)
-	tween(s.boxCorner, 0.3, {CornerRadius = UDim.new(0, 14)})
-	tween(s.pop, 0.3, {Scale = 0.3}, Ease.Back, EaseDir.In)
-	tween(s.dim, 0.3, {BackgroundTransparency = 1})
-	task.wait(0.35)
-	for _, unsub in ipairs(s.unsubs) do
-		unsub()
-	end
-	if s.contentUnsub then
-		s.contentUnsub()
-	end
-	s.gui:Destroy()
-end
-
--- Hata içeriği (şablona göre farklı menü)
-local function buildContent(s, code, def, ctx, W, H, finish)
-	local content = new("CanvasGroup", {
-		Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0, GroupTransparency = 1,
-	}, s.box)
-	local binds = {}
-	local function bind(fn)
-		binds[#binds + 1] = fn
-		fn()
-	end
-	local unsub = Lang.Subscribe(function()
-		for _, fn in ipairs(binds) do
-			pcall(fn)
-		end
-	end)
-
-	local function report()
-		return string.format("CR-SETA %s | %s\n%s\nlang=%s time=%s", code, def.T.EN[1],
-			tostring(ctx.detail or "-"), Lang.Code, os.date("!%Y-%m-%d %H:%M:%S"))
-	end
-	local function flash(b, key)
-		b.Text = T("copiedBtn")
-		task.delay(1.4, function()
-			if b.Parent then
-				b.Text = T(key)
-			end
-		end)
-	end
-
-	-- ortak başlık
-	local icon = new("Frame", {Position = UDim2.fromOffset(20, 20), Size = UDim2.fromOffset(46, 46), BackgroundColor3 = def.color, BorderSizePixel = 0}, content)
-	corner(icon, 23)
-	new("TextLabel", {
-		Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Font = Enum.Font.GothamBold,
-		TextSize = 24, TextColor3 = Color3.new(1, 1, 1), Text = def.icon,
-	}, icon)
-	local title = new("TextLabel", {
-		Position = UDim2.fromOffset(80, 20), Size = UDim2.new(1, -100, 0, 26), BackgroundTransparency = 1,
-		Font = Enum.Font.GothamBold, TextScaled = true, TextColor3 = C.text, TextXAlignment = Enum.TextXAlignment.Left,
-	}, content)
-	new("UITextSizeConstraint", {MaxTextSize = 17, MinTextSize = 10}, title)
-	local codeLabel = new("TextLabel", {
-		Position = UDim2.fromOffset(80, 46), Size = UDim2.new(1, -100, 0, 20), BackgroundTransparency = 1,
-		Font = Enum.Font.Gotham, TextSize = 12, TextColor3 = C.muted, TextXAlignment = Enum.TextXAlignment.Left,
-	}, content)
-	local desc = new("TextLabel", {
-		Position = UDim2.fromOffset(20, 80), Size = UDim2.new(1, -40, 0, 60), BackgroundTransparency = 1,
-		Font = Enum.Font.Gotham, TextSize = 13, TextColor3 = Color3.fromRGB(205, 216, 236), TextWrapped = true,
-		TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
-	}, content)
-	bind(function()
-		local tx = def.T[Lang.Code] or def.T.EN
-		title.Text, desc.Text = tx[1], tx[2]
-		codeLabel.Text = T("code") .. ": " .. code
-	end)
-	langBar(content, UDim2.fromOffset(20, H - 30))
-
-	local function buttonRow(items)
-		local gap = 8
-		local w = math.floor((W - 40 - gap * (#items - 1)) / #items)
-		for i, item in ipairs(items) do
-			local b = new("TextButton", {
-				Position = UDim2.fromOffset(20 + (i - 1) * (w + gap), H - 72), Size = UDim2.fromOffset(w, 38),
-				BackgroundColor3 = item.color, AutoButtonColor = false, Font = Enum.Font.GothamBold,
-				TextSize = 12, TextColor3 = C.text, TextTruncate = Enum.TextTruncate.AtEnd,
-			}, content)
-			corner(b, 10)
-			fx(b, 10)
-			bind(function()
-				b.Text = T(item.key)
-			end)
-			b.Activated:Connect(function()
-				item.click(b)
-			end)
-		end
-	end
-	local function copyButton()
-		return {key = "copy", color = C.button, click = function(b)
-			if copyText(report()) then
-				flash(b, "copy")
-			end
-		end}
-	end
-	local function retryButton()
-		return {key = "retry", color = C.accent, click = function()
-			finish("retry")
-		end}
-	end
-	local function closeButton()
-		return {key = "close", color = C.button, click = function()
-			finish("close")
-		end}
-	end
-
-	local function detailBox(y, h)
-		local box = new("TextBox", {
-			Position = UDim2.fromOffset(20, y), Size = UDim2.new(1, -40, 0, h), BackgroundColor3 = C.panel,
-			Font = Enum.Font.Code, TextSize = 11, TextColor3 = C.muted, TextWrapped = true, MultiLine = true,
-			ClearTextOnFocus = false, TextEditable = false, TextXAlignment = Enum.TextXAlignment.Left,
-			TextYAlignment = Enum.TextYAlignment.Top, Text = string.sub(tostring(ctx.detail or "-"), 1, 700),
-		}, content)
-		corner(box, 8)
-		new("UIPadding", {PaddingLeft = UDim.new(0, 8), PaddingTop = UDim.new(0, 6), PaddingRight = UDim.new(0, 8)}, box)
-	end
-
-	-- rows: {label = fn, state = "ok|fail|wait|yes|no", text = fn}
-	local function checklist(y, rows)
-		for i, row in ipairs(rows) do
-			local ry = y + (i - 1) * 26
-			local color = dotColor(row.state)
-			local dot = new("Frame", {Position = UDim2.fromOffset(24, ry + 6), Size = UDim2.fromOffset(12, 12), BackgroundColor3 = color, BorderSizePixel = 0}, content)
-			corner(dot, 6)
-			local label = new("TextLabel", {
-				Position = UDim2.fromOffset(46, ry), Size = UDim2.new(1, -150, 0, 24), BackgroundTransparency = 1,
-				Font = Enum.Font.GothamSemibold, TextSize = 13, TextColor3 = C.text, TextXAlignment = Enum.TextXAlignment.Left,
-			}, content)
-			local state = new("TextLabel", {
-				AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -24, 0, ry), Size = UDim2.fromOffset(90, 24),
-				BackgroundTransparency = 1, Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = color,
-				TextXAlignment = Enum.TextXAlignment.Right,
-			}, content)
-			bind(function()
-				label.Text, state.Text = row.label(), row.text()
-			end)
-		end
-	end
-
-	if def.tpl == "network" then
-		-- Ağ menüsü: geri sayımlı otomatik tekrar
-		local total = ctx.countdown or def.auto or 10
-		local remaining = total
-		local track = new("Frame", {Position = UDim2.fromOffset(20, 160), Size = UDim2.new(1, -40, 0, 6), BackgroundColor3 = C.panel, BorderSizePixel = 0}, content)
-		corner(track, 3)
-		local fill = new("Frame", {Size = UDim2.fromScale(1, 1), BackgroundColor3 = def.color, BorderSizePixel = 0}, track)
-		corner(fill, 3)
-		local countdown = new("TextLabel", {
-			Position = UDim2.fromOffset(20, 172), Size = UDim2.new(1, -40, 0, 18), BackgroundTransparency = 1,
-			Font = Enum.Font.GothamSemibold, TextSize = 12, TextColor3 = C.muted, TextXAlignment = Enum.TextXAlignment.Left,
-		}, content)
-		bind(function()
-			countdown.Text = T("retryIn") .. remaining .. T("secs")
-		end)
-		new("TextLabel", {
-			Position = UDim2.fromOffset(20, 196), Size = UDim2.new(1, -40, 0, 32), BackgroundTransparency = 1,
-			Font = Enum.Font.Code, TextSize = 11, TextColor3 = C.muted, TextWrapped = true,
-			TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
-			Text = string.sub(tostring(ctx.detail or ""), 1, 150),
-		}, content)
-		tween(fill, total, {Size = UDim2.fromScale(0, 1)}, Ease.Linear)
-		task.spawn(function()
-			while remaining > 0 do
-				task.wait(1)
-				if not content.Parent then
-					return
-				end
-				remaining -= 1
-				countdown.Text = T("retryIn") .. remaining .. T("secs")
-			end
-			finish("retry")
-		end)
-		buttonRow({retryButton(), copyButton()})
-
-	elseif def.tpl == "script" then
-		-- Script menüsü: 4 adımlı kontrol listesi + ayrıntı kutusu
-		local stage = ctx.stage or 1
-		local keys = {"sDownload", "sValidate", "sCompile", "sRun"}
-		local rows = {}
-		for i = 1, 4 do
-			local state = i < stage and "ok" or (i == stage and "fail" or "wait")
-			rows[i] = {
-				label = function()
-					return T(keys[i])
-				end,
-				state = state,
-				text = function()
-					return state == "ok" and "OK" or (state == "fail" and "X" or "—")
-				end,
-			}
-		end
-		checklist(142, rows)
-		detailBox(252, 92)
-		buttonRow({retryButton(), copyButton(), closeButton()})
-
-	elseif def.tpl == "key" then
-		-- Anahtar menüsü: yeni anahtar gir / anahtar al (+ kilit geri sayımı)
-		if ctx.lock then
-			local remaining = ctx.lock
-			local big = new("TextLabel", {
-				Position = UDim2.fromOffset(20, 146), Size = UDim2.new(1, -40, 0, 60), BackgroundTransparency = 1,
-				Font = Enum.Font.GothamBold, TextSize = 40, TextColor3 = def.color, Text = tostring(remaining),
-			}, content)
-			task.spawn(function()
-				while remaining > 0 do
-					task.wait(1)
-					if not content.Parent then
-						return
-					end
-					remaining -= 1
-					big.Text = tostring(remaining)
-				end
-				finish("key")
-			end)
-		end
-		buttonRow({
-			{key = "enterKey", color = C.accent, click = function()
-				finish("key")
-			end},
-			{key = "getKey", color = C.discord, click = function(b)
-				if copyText(K.K_URL) then
-					flash(b, "getKey")
-				end
-			end},
-		})
-
-	elseif def.tpl == "executor" then
-		-- Executor menüsü: eksik özellik listesi
-		local caps = ctx.caps or Net.caps()
-		local function row(key, value)
-			local state = value and "yes" or "no"
-			return {
-				label = function()
-					return T(key)
-				end,
-				state = state,
-				text = function()
-					return T(state)
-				end,
-			}
-		end
-		checklist(150, {row("rHttp", caps.http), row("rLoad", caps.loadstring), row("rClip", caps.clipboard), row("rFile", caps.files)})
-		buttonRow({copyButton(), closeButton()})
-
-	else
-		-- Genel menü
-		detailBox(150, 86)
-		buttonRow({retryButton(), copyButton(), closeButton()})
-	end
-
-	return content, unsub
-end
-
-local function showInternal(code, ctx)
-	ctx = ctx or {}
-	if not ERR[code] then
-		ctx.detail = tostring(ctx.detail or "") .. "\n(unknown code " .. tostring(code) .. ")"
-		code = "E18"
-	end
-	local def = ERR[code]
-	local W, H = SIZES[def.tpl][1], SIZES[def.tpl][2]
-
-	while Errors.Showing do
-		task.wait(0.1)
-	end
-	Errors.Showing = true
-
-	local s = Errors.Session
-	local fresh = not (s and s.gui and s.gui.Parent)
-	if fresh then
-		s = openSession()
-		Errors.Session = s
-	end
-	s.boxGrad.Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, def.color), ColorSequenceKeypoint.new(0.5, C.accent2), ColorSequenceKeypoint.new(1, def.color),
-	})
-	s.spGrad.Color = ColorSequence.new(def.color)
-	if s.content then
-		s.content:Destroy()
-		s.content = nil
-		if s.contentUnsub then
-			s.contentUnsub()
-			s.contentUnsub = nil
-		end
-	end
-
-	if fresh then
-		-- 1) mini kare
-		tween(s.pop, 0.35, {Scale = 1}, Ease.Back)
-		tween(s.box, 0.25, {BackgroundTransparency = 0})
-		task.wait(0.55)
-		-- 2) çubuk (Loading)
-		goBar(s)
-		task.wait(0.9)
-	else
-		task.wait(0.5)
-	end
-	-- 3) büyük kare (Loading)
-	goBig(s, W, H)
-	task.wait(1.0)
-
-	-- 4) hata menüsü
-	local result = Instance.new("BindableEvent")
-	local fired = false
-	local function finish(action)
-		if fired then
-			return
-		end
-		fired = true
-		result:Fire(action)
-	end
-	local content, unsub = buildContent(s, code, def, ctx, W, H, finish)
-	s.content, s.contentUnsub = content, unsub
-	tween(s.loading, 0.25, {GroupTransparency = 1})
-	tween(content, 0.3, {GroupTransparency = 0})
-	Errors.Showing = false
-
-	local action = result.Event:Wait()
-	result:Destroy()
-
-	if action == "retry" then
-		-- Yerinde "Yükleniyor" durumuna dön; çağıran Close() veya Show() çağırır
-		tween(content, 0.2, {GroupTransparency = 1})
-		task.wait(0.2)
-		content:Destroy()
-		if s.contentUnsub then
-			s.contentUnsub()
-		end
-		s.content, s.contentUnsub = nil, nil
-		tween(s.loading, 0.2, {GroupTransparency = 0})
-		goBar(s)
-	else
-		Errors.Session = nil
-		collapse(s)
-	end
-	return action
-end
-
--- Gösterir ve kullanıcı seçimini döndürür: "retry" | "key" | "close"
-function Errors.Show(code, ctx)
-	local ok, action = pcall(showInternal, code, ctx)
-	if ok then
-		return action
-	end
-	warn("[CR-SETA] hata menüsü açılamadı: " .. tostring(action))
-	Errors.Showing = false
-	local s = Errors.Session
-	Errors.Session = nil
-	if s and s.gui then
-		pcall(function()
-			s.gui:Destroy()
-		end)
-	end
-	Windows.Restore()
-	return "close"
-end
-
--- "retry" sonrası açık kalan yükleniyor çubuğunu kapatır
-function Errors.Close(restore)
-	local s = Errors.Session
-	if s then
-		Errors.Session = nil
-		collapse(s)
-	end
-	if restore then
-		Windows.Restore()
-	end
-end
-
---------------------------------------------------------------------
--- E) Anahtar sistemi
---------------------------------------------------------------------
-local Keys = {lastBody = nil, lastKeys = nil, retryAfter = nil}
-
--- Anahtar listesi: tablo | nil, hataKodu, ayrıntı
--- · ?t= değeri 5 saniyelik dilimlere bölünür: aynı dilimdeki herkes aynı önbelleği paylaşır,
---   sunucuya binen yük azalır ama liste en fazla ~5 sn eski kalır
--- · Gövde öncekiyle aynıysa yeniden ayrıştırılmaz (CPU harcamaz)
-function Keys.fetch()
-	local bucket = math.floor(nowTime() / 5)
-	local body, status, err, headers = Net.fetch(K.K_RAW .. "?t=" .. bucket, CFG.FetchTimeout)
-	if not body then
-		Keys.retryAfter = Net.retryAfter(headers)
-		return nil, Net.classify(status, err), string.format("GET key list -> status=%s err=%s", tostring(status), tostring(err))
-	end
-	Keys.retryAfter = nil
-	if body == Keys.lastBody and Keys.lastKeys then
-		return Keys.lastKeys
-	end
-	local keys, count = {}, 0
+fonksiyon Anahtarlar.getir()
+	yerel kova = math.floor(nowTime() / 5)
+	yerel gövde, durum, hata = httpGet(K.K_RAW .. "?t=" .. bucket, CFG.HttpTimeout)
+	eğer vücut değilse o zaman
+		nil döndür, (status == 0 ve "net" veya "net"), string.format("GET anahtar listesi -> status=%s err=%s",
+			tostring(status), tostring(err))
+	son
+	Eğer gövde, Keys.lastBody ve Keys.lastKeys'e eşitse, o zaman
+		Keys.lastKeys'i döndür
+	son
+	yerel anahtarlar, sayı = {}, 0
 	for line in body:gmatch("[^\r\n]+") do
-		local code = normalizeKey(line)
-		if code ~= "" and code:sub(1, 1) ~= "#" then
-			keys[code] = true
-			count += 1
-		end
-	end
-	local head = body:sub(1, 200):lower()
-	if count == 0 or head:find("<html", 1, true) or head:find("<!doctype", 1, true) then
-		return nil, "E11", string.format("key list invalid: %d keys, %d bytes", count, #body)
-	end
+		yerel kod = normalizeKey(satır)
+		Eğer kod ~= "" ve kod:sub(1, 1) ~= "#" ise
+			anahtarlar[kod] = doğru
+			sayı = sayı + 1
+		son
+	son
+	yerel baş = gövde:alt(1, 200):alt()
+	Eğer sayım 0'a eşitse veya head:find("<html", 1, true) veya head:find("<!doctype", 1, true) ise
+		nil döndür, "key", string.format("key list invalid: %d keys, %d bytes", count, #body)
+	son
 	Keys.lastBody, Keys.lastKeys = body, keys
-	return keys
-end
+	geri dönüş tuşları
+son
 
--- Yerel kayıt: her kodun ilk kullanım zamanı (MAC ile korunur)
-local MemoryStore = {}
+-- Yerel kayıt: anahtarın ilk kullanım zamanı (MAC ile korunur)
+yerel Mağaza = {raw = nil}
 
-local function loadStore()
-	local store = {started = {}, last = nil}
-	local raw = MemoryStore.raw
-	local isfile, readfile = getGlobal(K.K_IF), getGlobal(K.K_RF)
+yerel fonksiyon loadStore()
+	yerel mağaza = {başlangıç ​​= {}, son = nil}
+	yerel ham = Store.raw
+	yerel dosya, dosya oku = getGlobal(K.K_IF), getGlobal(K.K_RF)
 	if type(isfile) == "function" and type(readfile) == "function" then
-		local ok, data = pcall(function()
-			if isfile(K.K_FILE) then
-				return readfile(K.K_FILE)
-			end
-		end)
-		if ok and type(data) == "string" then
-			raw = data
-		end
-	end
+		yerel tamam, veri = pcall(fonksiyon()
+			eğer K.K_FILE dosya ise
+				readfile(K.K_FILE) fonksiyonunu döndür.
+			son
+		son)
+		eğer uygunsa ve type(data) == "string" ise
+			ham = veri
+		son
+	son
 	for line in tostring(raw or ""):gmatch("[^\r\n]+") do
-		local kind, a, b, c = line:match("^(%a)|([^|]*)|([^|]*)|?([^|]*)$")
-		if kind == "K" and mac("K", a, b) == c then
-			store.started[a] = tonumber(b)
-		elseif kind == "L" and mac("L", a) == b then
-			store.last = a
-		end
-	end
-	return store
-end
+		yerel tür, a, b, c = satır:eşleştir("^(%a)|([^|]*)|([^|]*)|?([^|]*)$")
+		eğer kind == "K" ve mac("K", a, b) == c ise
+			mağaza.başlatıldı[a] = tonumber(b)
+		aksi takdirde eğer kind == "L" ve mac("L", a) == b ise o zaman
+			mağaza.son = bir
+		son
+	son
+	mağazaya geri dön
+son
 
-local function saveStore(store)
-	local lines = {}
-	for id, started in pairs(store.started) do
-		table.insert(lines, string.format("K|%s|%s|%s", id, tostring(started), mac("K", id, tostring(started))))
-	end
-	if store.last then
-		table.insert(lines, string.format("L|%s|%s", store.last, mac("L", store.last)))
-	end
-	local data = table.concat(lines, "\n")
-	MemoryStore.raw = data
-	local writefile = getGlobal(K.K_WF)
+yerel fonksiyon saveStore(store)
+	yerel satırlar = {}
+	id için, çiftler halinde başlatıldı (store.started) do
+		lines[#lines + 1] = string.format("K|%s|%s|%s", id, tostring(started), mac("K", id, tostring(started)))
+	son
+	eğer store.last ise o zaman
+		lines[#lines + 1] = string.format("L|%s|%s", store.last, mac("L", store.last))
+	son
+	yerel veri = tablo.concat(satırlar, "\n")
+	Store.raw = data
+	yerel yazma dosyası = getGlobal(K.K_WF)
 	if type(writefile) == "function" then
 		pcall(writefile, K.K_FILE, data)
-	end
-end
+	son
+son
 
--- Doğrulama: true, bitişZamanı, kod | false, sebep, ayrıntı
--- sebep: "empty" | "invalid" (satır içi mesaj) ya da E.. hata kodu (menü)
-local function verifyKey(input, keysOverride)
-	local code = normalizeKey(input)
-	if code == "" then
-		return false, "empty"
-	end
-	local keys, errCode, detail = keysOverride, nil, nil
-	if not keys then
-		keys, errCode, detail = Keys.fetch()
-	end
-	if not keys then
-		return false, errCode, detail
-	end
-	if not keys[code] then
-		return false, "invalid"
-	end
-
-	local store = loadStore()
-	local id = khash(code)
-	local t = nowTime()
-	local started = store.started[id]
-	if not started then
-		started = t
-		store.started[id] = started
-	end
-	if t >= started + CFG.KeyLifetime then
-		return false, "E13", "key lifetime ended"
-	end
-	store.last = code
+-- true, bitişZamanı, kod | yanlış, sebep, ayrıntı
+yerel fonksiyon verifyKey(giriş, keysOverride)
+	yerel kod = normalizeKey(giriş)
+	eğer kod == "" ise o zaman
+		false döndür, "boş"
+	son
+	yerel anahtarlar, sebep, detay = keysOverride, nil, nil
+	anahtarlar değilse o zaman
+		anahtarlar, neden, detay = Anahtarlar.getir()
+	son
+	anahtarlar değilse o zaman
+		false döndür, sebep, detay
+	son
+	eğer anahtarlar [kod] değilse o zaman
+		false döndür, "geçersiz"
+	son
+	yerel mağaza = loadStore()
+	yerel kimlik = khash(kod)
+	yerel t = şimdiZaman()
+	yerel başlatıldı = mağaza.başlatıldı[id]
+	başlatılmadıysa
+		başladı = t
+		mağaza.başlatıldı[id] = başlatıldı
+	son
+	eğer t >= started + CFG.KeyLifetime ise
+		false döndür, "süresi doldu", "anahtarın kullanım ömrü sona erdi"
+	son
+	mağaza.son = kod
 	saveStore(store)
-	return true, started + CFG.KeyLifetime, code
-end
+	true döndür, başlatıldı + CFG.KeyLifetime, kod
+son
 
-local function keyToast(text, color)
-	local old = PlayerGui:FindFirstChild("crseta_toast")
-	if old then
-		old:Destroy()
-	end
-	local holder = new("ScreenGui", {Name = "crseta_toast", ResetOnSpawn = false, DisplayOrder = 120}, PlayerGui)
-	local label = new("TextLabel", {
-		AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, 40), Size = UDim2.fromOffset(320, 38),
-		BackgroundColor3 = C.panel, Font = Enum.Font.GothamSemibold, Text = text, TextSize = 13, TextColor3 = color or C.text,
-	}, holder)
-	corner(label, 10)
-	stroke(label, color or C.accent, 1.5, 0.2)
-	tween(label, 0.35, {Position = UDim2.new(0.5, 0, 1, -28)}, Ease.Back)
-	task.delay(3.2, function()
-		if label.Parent then
-			tween(label, 0.3, {Position = UDim2.new(0.5, 0, 1, 60)}, Ease.Quad, EaseDir.In)
-			task.wait(0.35)
-			holder:Destroy()
-		end
-	end)
-end
+----------------------------------------------------------------------
+-- 9) Tek mesaj penceresi (hata / bilgi) -- 18 hata kodunun yerine
+----------------------------------------------------------------------
+yerel Msg = {gui = nil}
 
--- Giriş penceresi: geçerli anahtar girilene kadar bekler -> bitişZamanı, kod
-local Gate = {}
+yerel fonksiyon closeMsg()
+	eğer Msg.gui ise o zaman
+		Msg.gui:Yok Et()
+		Msg.gui = nil
+	son
+son
 
-function Gate.run(message)
-	local ui = new("ScreenGui", {Name = "crseta_key", ResetOnSpawn = false, DisplayOrder = 100}, PlayerGui)
-	Shared.Register(ui)
-	-- Modal: Shift Lock açıkken bile fare serbest kalır
-	new("TextButton", {Size = UDim2.fromOffset(1, 1), BackgroundTransparency = 1, Text = "", Modal = true}, ui)
+-- tür: "hata" | "bilgi" | "anahtar"
+-- eylemler: {{etiket, renk, tıklama, kimlik}}
+-- Dönüş: tıklanan eylemin kimliği (ya da nil)
+yerel fonksiyon showMsg(tür, başlık, detay, işlemler)
+	mesajı kapat()
+	yerel renk = tür == "anahtar" ve C.accent2 veya (tür == "bilgi" ve C.accent veya C.red)
+	yerel kullanıcı arayüzü = yeni("ScreenGui", {Name = "crseta_msg", ResetOnSpawn = false, DisplayOrder = 300}, PlayerGui)
+	Msg.gui = ui
+	Paylaşılan.Kayıt(ui)
 
-	local card = new("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 20), Size = UDim2.fromOffset(360, 292),
+	yerel boyut = yeni("Çerçeve", {
+		Boyut = UDim2.fromScale(1, 1), Arka PlanRengi3 = Color3.new(0, 0, 0),
+		BackgroundTransparency = 0.45, BorderSizePixel = 0, Active = true,
+	}, ui)
+
+	yerel W, H = 400, 300
+	yerel kart = yeni("Çerçeve", {
+		Çapa Noktası = Vektör2.new(0.5, 0.5), Konum = UDim2.new(0.5, 0, 0.5, 0), Boyut = UDim2.fromOffset(G, Y),
+		BackgroundColor3 = C.bgTop, BorderSizePixel = 0, ClipsDescendants = true,
+	}, ui)
+	köşe(kart, 18)
+	yerel cardStroke = stroke(card, Color3.new(1, 1, 1), 1.8, 0.1)
+	yerel cardGradient = new("UIGradient", {
+		Renk = RenkDizisi.yeni({
+			ColorSequenceKeypoint.new(0, color), ColorSequenceKeypoint.new(0.5, C.accent2), ColorSequenceKeypoint.new(1, color),
+		}),
+	}, cardStroke)
+	TweenService:Create(cardGradient, TweenInfo.new(4, Enum.EasingStyle.Linear, Enum.EasingDirection.In, -1),
+		{Döndürme = 360}):Oynat()
+	yerel cardScale = new("UIScale", {Scale = 0.9}, card)
+
+	yerel simge = yeni("Çerçeve", {
+		Konum = UDim2.fromOffset(24, 24), Boyut = UDim2.fromOffset(44, 44), Arka Plan Rengi3 = renk, Kenar Boyutu Pikseli = 0,
+	}, kart)
+	köşe(simge, 22)
+	yeni("Metin Etiketi", {
+		Boyut = UDim2.fromScale(1, 1), Arka Plan Şeffaflığı = 1, Yazı Tipi = Enum.Font.GothamBold,
+		TextSize = 22, TextColor3 = C.text, Text = kind == "info" and "i" or "!",
+	}, simge)
+
+	yerel başlık etiketi = yeni("Metin etiketi", {
+		Konum = UDim2.fromOffset(80, 24), Boyut = UDim2.new(1, -104, 0, 26), Arka Plan Şeffaflığı = 1,
+		Yazı Tipi = Enum.Font.GothamBold, Metin Boyutu = 18, Metin Rengi 3 = C.text, Metin X Hizalaması = Enum.TextXAlignment.Left,
+	}, kart)
+	yerel descLabel = new("Metin Etiketi", {
+		Konum = UDim2.fromOffset(24, 84), Boyut = UDim2.new(1, -48, 0, 64), Arka Plan Şeffaflığı = 1,
+		Yazı Tipi = Enum.Font.Gotham, Metin Boyutu = 13, Metin Rengi3 = Color3.fromRGB(205, 216, 236), Metin Kaydırma = true,
+		TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, Text = detail or "",
+	}, kart)
+	yerel codeLabel = new("Metin Etiketi", {
+		Konum = UDim2.fromOffset(24, 152), Boyut = UDim2.new(1, -48, 0, 18), Arka Plan Şeffaflığı = 1,
+		Yazı Tipi = Enum.Font.GothamSemibold, Metin Boyutu = 12, Metin Rengi 3 = C.muted, Metin X Hizalaması = Enum.TextXAlignment.Left,
+	}, kart)
+
+	yerel fonksiyon applyTexts()
+		başlıkEtiketi.Metin = başlık
+		descLabel.Text = detay veya ""
+	son
+	applyTexts()
+	yerel abonelikten çıkma = Lang.Subscribe(applyTexts)
+
+	-- Koller
+	yerel sonuç = Instance.new("BindableEvent")
+	yerel olarak ateşlendi = yanlış
+	yerel fonksiyon bitir(id)
+		ateşlenirse, sonu döndür
+		kovuldu = doğru
+		sonuç:Yangın(id)
+	son
+
+	yerel sayı = #işlemler
+	yerel boşluk = 10
+	yerel bw = math.floor((W - 48 - gap * (count - 1)) / math.max(count, 1))
+	for i, act in ipairs(actions) do
+		yerel b = new("MetinDüğmesi", {
+			Konum = UDim2.fromOffset(24 + (i - 1) * (bw + gap), H - 66), Boyut = UDim2.fromOffset(bw, 40),
+			BackgroundColor3 = act.color veya C.button, AutoButtonColor = false, Font = Enum.Font.GothamBold,
+			TextSize = 13, TextColor3 = C.text,
+		}, kart)
+		köşe(b, 10)
+		fx(b)
+		b.Metin = eylem.etiket
+		b.Aktif edildi:Bağlan(fonksiyon()
+			eğer act.onClick ise
+				eylem.onClick()
+			son
+			bitir(act.id)
+		son)
+	son
+
+	yerel copyBtn = new("TextButton", {
+		Çapa Noktası = Vektör2.new(1, 0), Konum = UDim2.new(1, -24, 0, 152), Boyut = UDim2.fromOffset(90, 22),
+		BackgroundTransparency = 1, Font = Enum.Font.GothamBold, TextSize = 11, TextColor3 = C.muted,
+		TextXAlignment = Enum.TextXAlignment.Right,
+	}, kart)
+	yerel fonksiyon copyReport()
+		yerel metin = string.format("CR-SETA\n%s\n%s\ntime=%s", başlık, tostring(detay), os.date("%Y-%m-%d %H:%M:%S"))
+		eğer copyText(text) ise
+			copyBtn.Text = T("copiedBtn")
+			görev.gecikme(1.4, fonksiyon())
+				eğer copyBtn.Parent ise
+					copyBtn.Text = T("copy")
+				son
+			son)
+		son
+	son
+	copyBtn.Text = T("copy")
+	copyBtn.Activated:Connect(copyReport)
+
+	tween(cardScale, 0.35, {Scale = 1}, Enum.EasingStyle.Back)
+	tween(dim, 0.3, {BackgroundTransparency = 0.45})
+
+	yerel eylem = sonuç.Olay:Bekle()
+	sonuç:Yok Et()
+	aboneliği kaldır()
+	mesajı kapat()
+	geri dönüş işlemi
+son
+
+----------------------------------------------------------------------
+-- 10) Yük göstergesi
+----------------------------------------------------------------------
+yerel Yük = {}
+
+fonksiyon Yükle.göster(metin)
+	Yükle.gizle()
+	yerel kullanıcı arayüzü = yeni("ScreenGui", {Name = "crseta_loading", ResetOnSpawn = false, DisplayOrder = 290}, PlayerGui)
+	Load.gui = ui
+	Paylaşılan.Kayıt(ui)
+	yerel boyut = yeni("Çerçeve", {
+		Boyut = UDim2.fromScale(1, 1), Arka PlanRengi3 = Color3.new(0, 0, 0),
+		BackgroundTransparency = 0.45, BorderSizePixel = 0, Active = true,
+	}, ui)
+	yerel kart = yeni("Çerçeve", {
+		Çapa Noktası = Vector2.new(0.5, 0.5), Konum = UDim2.new(0.5, 0, 0.5, 0), Boyut = UDim2.fromOffset(320, 70),
 		BackgroundColor3 = C.bgTop, BorderSizePixel = 0,
 	}, ui)
-	corner(card, 18)
-	local cardStroke = stroke(card, Color3.new(1, 1, 1), 1.8, 0.1)
-	local cardGradient = new("UIGradient", {
-		Color = ColorSequence.new({
+	köşe(kart, 16)
+	yerel etiket = yeni("MetinEtiketi", {
+		Boyut = UDim2.fromScale(1, 1), Arka Plan Şeffaflığı = 1, Yazı Tipi = Enum.Font.GothamSemibold,
+		TextSize = 14, TextColor3 = C.text, Text = text or T("loading"),
+	}, kart)
+	Yükle.etiket = etiket
+	yerel ölçek = yeni("UIScale", {Ölçek = 0.85}, kart)
+	tween(ölçek, 0.35, {Ölçek = 1}, Enum.EasingStyle.Back)
+son
+
+fonksiyon Yükle.metni ayarla(metin)
+	eğer Load.label ise
+		Yükle.etiket.Metin = metin
+	son
+son
+
+Yükle.gizle fonksiyonu
+	eğer Load.gui ise
+		Yükle.gui:Yok Et()
+		Load.gui = nil
+		Yükle.etiket = nil
+	son
+son
+
+----------------------------------------------------------------------
+-- 11) Anahtar Etiketler
+----------------------------------------------------------------------
+yerel fonksiyon keyToast(metin, renk)
+	yerel eski = PlayerGuid:FindFirstChild("crseta_toast")
+	eğer yaşlıysa o zaman
+		eski:Yok Et()
+	son
+	yerel tutucu = new("ScreenGui", {Name = "crseta_toast", ResetOnSpawn = false, DisplayOrder = 120}, PlayerGui)
+	yerel etiket = yeni("MetinEtiketi", {
+		Çapa Noktası = Vector2.new(0.5, 1), Konum = UDim2.new(0.5, 0, 1, 40), Boyut = UDim2.fromOffset(320, 38),
+		BackgroundColor3 = C.panel, Font = Enum.Font.GothamSemibold, Text = text, TextSize = 13, TextColor3 = color or C.text,
+	}, tutucu)
+	köşe(etiket, 10)
+	çizgi(etiket, renk veya C.vurgu, 1,5, 0,2)
+	tween(label, 0.35, {Position = UDim2.new(0.5, 0, 1, -28)}, Enum.EasingStyle.Back)
+	görev.gecikme(3.2, fonksiyon()
+		eğer etiket.Ebeveyn ise
+			tween(label, 0.3, {Position = UDim2.new(0.5, 0, 1, 60)}, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+			görev.bekle(0.35)
+			tutucu:Yok et()
+		son
+	son)
+son
+
+-- Anahtar girilene kadar bekler -> bitişZamanı, kod
+yerel fonksiyon kapısı (mesaj)
+	yerel kullanıcı arayüzü = yeni("ScreenGui", {Name = "crseta_key", ResetOnSpawn = false, DisplayOrder = 100}, PlayerGui)
+	Paylaşılan.Kayıt(ui)
+
+	yerel kart = yeni("Çerçeve", {
+		Çapa Noktası = Vector2.new(0.5, 0.5), Konum = UDim2.new(0.5, 0, 0.5, 20), Boyut = UDim2.fromOffset(360, 292),
+		BackgroundColor3 = C.bgTop, BorderSizePixel = 0,
+	}, ui)
+	köşe(kart, 18)
+	yerel cardStroke = stroke(card, Color3.new(1, 1, 1), 1.8, 0.1)
+	yerel cardGradient = new("UIGradient", {
+		Renk = RenkDizisi.yeni({
 			ColorSequenceKeypoint.new(0, C.accent), ColorSequenceKeypoint.new(0.5, C.accent2), ColorSequenceKeypoint.new(1, C.accent),
 		}),
 	}, cardStroke)
-	TweenService:Create(cardGradient, TweenInfo.new(4, Ease.Linear, EaseDir.In, -1), {Rotation = 360}):Play()
-	local cardScale = new("UIScale", {Scale = 0.85}, card)
+	TweenService:Create(cardGradient, TweenInfo.new(4, Enum.EasingStyle.Linear, Enum.EasingDirection.In, -1),
+		{Döndürme = 360}):Oynat()
+	yerel cardScale = new("UIScale", {Scale = 0.85}, card)
 
-	local title = new("TextLabel", {
-		Position = UDim2.fromOffset(20, 16), Size = UDim2.new(1, -40, 0, 26), BackgroundTransparency = 1,
-		Font = Enum.Font.GothamBold, TextSize = 21, TextColor3 = C.text, TextXAlignment = Enum.TextXAlignment.Left,
-	}, card)
-	local sub = new("TextLabel", {
-		Position = UDim2.fromOffset(20, 44), Size = UDim2.new(1, -40, 0, 16), BackgroundTransparency = 1,
-		Font = Enum.Font.Gotham, TextSize = 12, TextColor3 = C.muted, TextXAlignment = Enum.TextXAlignment.Left,
-	}, card)
-	local box = new("TextBox", {
-		Position = UDim2.fromOffset(20, 76), Size = UDim2.new(1, -40, 0, 44), BackgroundColor3 = C.panel,
-		Font = Enum.Font.GothamSemibold, TextSize = 15, TextColor3 = C.text, PlaceholderColor3 = C.muted,
-		Text = "", ClearTextOnFocus = false,
-	}, card)
-	corner(box, 11)
-	local boxStroke = stroke(box, C.button, 1.4, 0)
+	yerel başlık = yeni("Metin Etiketi", {
+		Konum = UDim2.fromOffset(20, 16), Boyut = UDim2.new(1, -40, 0, 26), Arka Plan Şeffaflığı = 1,
+		Yazı Tipi = Enum.Font.GothamBold, Metin Boyutu = 21, Metin Rengi 3 = C.text, Metin X Hizalaması = Enum.TextXAlignment.Left,
+	}, kart)
+	yerel alt küme = yeni("Metin Etiketi", {
+		Konum = UDim2.fromOffset(20, 44), Boyut = UDim2.new(1, -40, 0, 16), Arka Plan Şeffaflığı = 1,
+		Yazı Tipi = Enum.Font.Gotham, Metin Boyutu = 12, Metin Rengi 3 = C.muted, Metin X Hizalaması = Enum.TextXAlignment.Left,
+	}, kart)
+	yerel kutu = yeni("Metin Kutusu", {
+		Konum = UDim2.fromOffset(20, 76), Boyut = UDim2.new(1, -40, 0, 44), Arka Plan Rengi3 = C.panel,
+		Yazı Tipi = Enum.Font.GothamSemibold, Metin Boyutu = 15, Metin Rengi3 = C.text, Yer Tutucu Rengi3 = C.muted,
+		Metin = "", Odaklandığında Metni Temizle = false,
+	}, kart)
+	köşe(kutu, 11)
+	yerel kutuÇizgisi = çizgi(kutu, C.düğme, 1.4, 0)
 
-	local enterBtn = new("TextButton", {
-		Position = UDim2.fromOffset(20, 134), Size = UDim2.new(0.5, -26, 0, 42), BackgroundColor3 = C.accent,
+	yerel enterBtn = new("TextButton", {
+		Konum = UDim2.fromOffset(20, 134), Boyut = UDim2.new(0.5, -26, 0, 42), Arka Plan Rengi3 = C.accent,
 		AutoButtonColor = false, Font = Enum.Font.GothamBold, TextSize = 14, TextColor3 = C.text,
-	}, card)
-	corner(enterBtn, 11)
-	fx(enterBtn, 11, Color3.fromRGB(40, 185, 255))
-	local getBtn = new("TextButton", {
-		AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -20, 0, 134), Size = UDim2.new(0.5, -26, 0, 42),
+	}, kart)
+	köşe(enterBtn, 11)
+	fx(enterBtn, Color3.fromRGB(40, 185, 255))
+	yerel getBtn = new("TextButton", {
+		Çapa Noktası = Vektör2.new(1, 0), Konum = UDim2.new(1, -20, 0, 134), Boyut = UDim2.new(0.5, -26, 0, 42),
 		BackgroundColor3 = C.discord, AutoButtonColor = false, Font = Enum.Font.GothamBold, TextSize = 14, TextColor3 = C.text,
-	}, card)
-	corner(getBtn, 11)
-	fx(getBtn, 11, C.discordHover)
+	}, kart)
+	köşe(getBtn, 11)
+	fx(getBtn, C.discordHover)
 
-	local linkBox = new("TextBox", {
-		Position = UDim2.fromOffset(20, 186), Size = UDim2.new(1, -40, 0, 30), BackgroundColor3 = C.panel,
-		Font = Enum.Font.Gotham, TextSize = 11, TextColor3 = C.text, Text = K.K_URL, TextEditable = false,
+	yerel bağlantı kutusu = yeni("Metin Kutusu", {
+		Konum = UDim2.fromOffset(20, 186), Boyut = UDim2.new(1, -40, 0, 30), Arka Plan Rengi3 = C.panel,
+		Yazı Tipi = Enum.Font.Gotham, Metin Boyutu = 11, Metin Rengi 3 = C.text, Metin = K.K_URL, Metin Düzenlenebilir = false,
 		ClearTextOnFocus = false, Visible = false,
-	}, card)
-	corner(linkBox, 8)
-	local status = new("TextLabel", {
-		Position = UDim2.fromOffset(20, 222), Size = UDim2.new(1, -40, 0, 30), BackgroundTransparency = 1,
-		Font = Enum.Font.GothamSemibold, TextSize = 12, TextColor3 = C.muted, TextWrapped = true, Text = message or "",
-		TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
-	}, card)
-	langBar(card, UDim2.fromOffset(20, 260))
+	}, kart)
+	köşe(linkBox, 8)
+	yerel durum = yeni("Metin Etiketi", {
+		Konum = UDim2.fromOffset(20, 222), Boyut = UDim2.new(1, -40, 0, 30), Arka Plan Şeffaflığı = 1,
+		Yazı Tipi = Enum.Font.GothamSemibold, Metin Boyutu = 12, Metin Rengi 3 = C.muted, Metin Kaydırma = true,
+		Metin = mesaj veya "", TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+	}, kart)
 
-	-- Satır içi mesaj: dil değişince yeniden çevrilebilsin diye anahtar olarak tutulur
-	local statusKey, statusExtra, statusColor
-	local function setStatus(key, color, extra)
-		statusKey, statusColor, statusExtra = key, color or C.muted, extra or ""
-		status.Text = T(key) .. statusExtra
+	-- dil parçaları
+	yerel çubuk = yeni("Çerçeve", {
+		Konum = UDim2.fromOffset(20, 260), Boyut = UDim2.fromOffset(146, 20), Arka Plan Şeffaflığı = 1,
+	}, kart)
+	yeni("UIListLayout", {
+		DoldurmaYönü = Enum.FillDirection.Horizontal, Dolgu = UDim.new(0, 4), SıralamaSırası = Enum.SortOrder.LayoutOrder,
+	}, çubuk)
+	yerel langButtons = {}
+	for index, code in ipairs(Lang.List) do
+		yerel b = new("MetinDüğmesi", {
+			LayoutOrder = index, Size = UDim2.fromOffset(26, 20), BackgroundColor3 = C.button,
+			AutoButtonColor = false, Font = Enum.Font.GothamBold, Text = code, TextSize = 10, TextColor3 = C.muted,
+		}, çubuk)
+		köşe(b, 6)
+		b.Aktif edildi:Bağlan(fonksiyon()
+			Dil.Set(kod)
+		son)
+		langButtons[code] = b
+	son
+
+	yerel durum anahtarı, durum eki, durum rengi
+	yerel fonksiyon setStatus(anahtar, renk, ekstra)
+		statusKey, statusColor, statusExtra = key, color veya C.muted, extra veya ""
+		durum.Metin = T(anahtar) .. durumEkstra
 		status.TextColor3 = statusColor
-	end
-	local function applyTexts()
-		title.Text, sub.Text = T("title"), T("sub")
-		box.PlaceholderText = T("placeholder")
+	son
+	yerel fonksiyon applyTexts()
+		başlık.Metin, alt metin.Metin = T("başlık"), T("alt metin")
+		kutu.Yer tutucuMetni = T("yer tutucu")
 		enterBtn.Text, getBtn.Text = T("enter"), T("get")
-		if statusKey then
-			status.Text = T(statusKey) .. statusExtra
-		end
-	end
+		eğer statusKey ise
+			durum.Metin = T(durumAnahtarı) .. durumEkstra
+		son
+		for code, b in pairs(langButtons) do
+			yerel açık = kod == Lang.Code
+			tween(b, 0.15, {BackgroundColor3 = on ve C.accent veya C.button, TextColor3 = on ve C.text veya C.muted})
+		son
+	son
 	applyTexts()
-	local unsub = Lang.Subscribe(applyTexts)
-	tween(cardScale, 0.4, {Scale = 1}, Ease.Back)
-	tween(card, 0.4, {Position = UDim2.new(0.5, 0, 0.5, 0)}, Ease.Quint)
+	yerel abonelikten çıkma = Lang.Subscribe(applyTexts)
+	tween(cardScale, 0.4, {Scale = 1}, Enum.EasingStyle.Back)
+	tween(card, 0.4, {Position = UDim2.new(0.5, 0, 0.5, 0)}, Enum.EasingStyle.Quint)
 
-	local result = Instance.new("BindableEvent")
-	local busy, fails, lockedUntil = false, 0, 0
+	yerel sonuç = Instance.new("BindableEvent")
+	yerel meşgul, başarısız, kilitli kalana kadar = yanlış, 0, 0
 
-	local function shake()
-		local base = card.Position
+	yerel fonksiyon shake()
+		yerel taban = kart.Konum
 		for _, dx in ipairs({-8, 8, -5, 5, 0}) do
 			tween(card, 0.05, {Position = UDim2.new(base.X.Scale, base.X.Offset + dx, base.Y.Scale, base.Y.Offset)})
-			task.wait(0.05)
-		end
+			görev.bekle(0.05)
+		son
 		tween(boxStroke, 0.4, {Color = C.button})
-	end
+	son
 
-	local function submit()
-		if busy then
-			return
-		end
-		local now = os.clock()
-		if now < lockedUntil then
+	yerel fonksiyon submit()
+		meşgul ise o zaman
+			geri dönmek
+		son
+		yerel şimdi = mono()
+		eğer şimdi < kilitliyse o zamana kadar
 			setStatus("wait", C.red, math.ceil(lockedUntil - now) .. T("secs"))
-			return
-		end
-		busy = true
+			geri dönmek
+		son
+		meşgul = doğru
 		setStatus("checking", C.muted)
-		local text = box.Text
+		yerel metin = kutu.Metin
 
-		while true do
-			local ok, a, b = verifyKey(text)
-			if ok then
-				Errors.Close() -- "tekrar dene" ile açık kaldıysa kapat
-				local remaining = a - nowTime()
-				setStatus("ok", C.green, formatRemaining(remaining))
-				tween(boxStroke, 0.2, {Color = C.green})
-				task.wait(0.7)
-				tween(cardScale, 0.25, {Scale = 0.85}, Ease.Back, EaseDir.In)
-				task.wait(0.25)
-				unsub()
-				ui:Destroy()
-				keyToast(T("ok") .. formatRemaining(remaining), C.green)
-				result:Fire(a, b)
-				return
-			end
+		yerel ok, a, b = verifyKey(metin)
+		Eğer uygunsa o zaman
+			yerel son kullanma tarihi, kod = a, b
+			kutuÇizgisi.Renk = C.yeşil
+			setStatus("tamam", C.green, formatRemaining(son kullanma tarihi - nowTime()))
+			görev.bekle(0.6)
+			tween(cardScale, 0.25, {Scale = 0.85}, Enum.EasingStyle.Back, Enum.EasingDirection.In)
+			görev.bekle(0.2)
+			aboneliği kaldır()
+			ui:Yok Et()
+			keyToast(T("ok") .. formatRemaining(expiry - nowTime()), C.green)
+			sonuç: Ateşle (son kullanma tarihi, kod)
+			geri dönmek
+		son
 
-			if isErr(a) then
-				-- Ağ / anahtar hataları kendi menüsünü açar
-				local action = Errors.Show(a, {detail = b, caps = Net.caps()})
-				if action ~= "retry" then
-					Windows.Restore()
-					break
-				end
-			else
-				Errors.Close(true)
-				fails += 1
-				if fails >= CFG.WrongTries then
-					fails = 0
-					lockedUntil = os.clock() + CFG.LockSeconds
-					Errors.Show("E14", {lock = CFG.LockSeconds})
-					Windows.Restore()
-					break
-				end
-				setStatus(a, C.red)
-				tween(boxStroke, 0.15, {Color = C.red})
-				shake()
-				break
-			end
-		end
-		busy = false
-		if statusKey == "checking" then
-			statusKey = nil
-			status.Text = ""
-		end
-	end
+		meşgul = yanlış
+		yerel sebep, detay = a, b
+		eğer sebep "net" ise o zaman
+			setStatus("netError", C.red)
+			sallamak()
+		aksi takdirde eğer sebep "anahtar" ise o zaman
+			setStatus("keyError", C.red)
+			sallamak()
+		aksi takdirde sebep "boş" ise
+			setStatus("empty", C.red)
+		başka
+			başarısızlıklar = başarısızlıklar + 1
+			Eğer başarısız deneme sayısı CFG.WrongTries'den büyük veya eşitse, o zaman
+				başarısızlıklar = 0
+				lockedUntil = mono() + CFG.LockSeconds
+			son
+			setStatus("geçersiz", C.red)
+			tween(boxStroke, 0.15, {Color = C.red})
+			sallamak()
+		son
+		eğer statusKey == "checking" ise
+			durumAnahtarı = nil
+			durum.Metin = ""
+		son
+	son
 
 	enterBtn.Activated:Connect(submit)
-	box.FocusLost:Connect(function(enterPressed)
-		if enterPressed then
-			submit()
-		end
-	end)
+	kutu.OdakKaybı:Bağlan(fonksiyon(enterPressed)
+		Enter tuşuna basılırsa
+			göndermek()
+		son
+	son)
 	getBtn.Activated:Connect(function()
-		if copyText(K.K_URL) then
-			linkBox.Visible = false
-			setStatus("copied", C.green)
-		else
+		Eğer copyText(K.K_URL) varsa, o zaman
+			setStatus("copyed", C.green)
+		başka
 			linkBox.Visible = true
 			setStatus("manual", C.muted)
-			pcall(function()
+			pcall(fonksiyon()
 				linkBox:CaptureFocus()
-			end)
-		end
-	end)
+			son)
+		son
+	son)
 
-	return result.Event:Wait()
-end
+	yerel süre sonu, kod = sonuç.Olay:Bekle()
+	iade süresi, kod
+son
 
--- Kayıtlı anahtar hâlâ geçerliyse sessiz giriş: bitişZamanı, kod | nil, "gate" | nil, "abort"
-local Auth = {}
+----------------------------------------------------------------------
+-- 12) Normal kod geliyor
+----------------------------------------------------------------------
+yerel Yükleyici = {yükleme = false}
 
-function Auth.silent()
-	local store = loadStore()
-	local saved = store.last
-	if not saved then
-		return nil, "gate"
-	end
-	while true do
-		local ok, a, b = verifyKey(saved)
-		if ok then
-			Errors.Close()
-			keyToast(T("ok") .. formatRemaining(a - nowTime()), C.green)
-			return a, b
-		end
-		local code = a
-		if a == "invalid" or a == "empty" then
-			code = "E12" -- kayıtlı anahtar listeden kaldırılmış
-		end
-		local action = Errors.Show(code, {detail = b, caps = Net.caps()})
-		if action == "retry" and isErr(a) and a ~= "E13" then
-			-- tekrar dene: döngü devam eder
-		elseif action == "close" then
-			return nil, "abort"
-		else
-			Errors.Close()
-			return nil, "gate"
-		end
-	end
-end
-
---------------------------------------------------------------------
--- F) Normal kod yükleyici
---------------------------------------------------------------------
-local Loader = {loading = false}
-
--- Önceki pencereleri temizler (yeniden denemede çift pencere olmasın)
-function Loader.cleanup()
+Yükleyici.temizleme fonksiyonu
 	for _, g in ipairs(Shared.Windows) do
 		if typeof(g) == "Instance" then
-			pcall(function()
-				g:Destroy()
-			end)
-		end
-	end
-	Shared.Windows = {}
-	Windows.hidden = {}
-end
+			pcall(fonksiyon()
+				g:Yok Et()
+			son)
+		son
+	son
+	Paylaşılan Pencereler = {}
+son
 
--- Aşamalar: 1 indirme · 2 doğrulama · 3 derleme · 4 çalıştırma
--- Dönüş: true | false, hataKodu, ayrıntı, aşama
-function Loader.load()
-	Shared.Ready = false
-	Shared.Failed = nil
+-- Aday adresler sırayla denenir (dosya adı değişse bile çalışır)
+yerel ANA_URL'ler = {
+	K.MAIN1,
+	K.MAIN2,
+	K.MAIN3,
+}
 
-	-- 1) İndirme (3 deneme; 404 / 429'da boşuna tekrar denenmez)
-	local body, status, err
-	for attempt = 1, 3 do
-		body, status, err = Net.fetch(MAIN_URL .. "?v=" .. math.floor(nowTime() / 60), CFG.MainTimeout)
-		if body then
-			break
-		end
-		if status == 404 or status == 410 or status == 429 then
-			break
-		end
-		if attempt < 3 then
-			task.wait(attempt)
-		end
-	end
-	if not body then
-		local code = Net.classify(status, err)
-		if code == "E03" then
-			code = "E07" -- normal kod indirilemedi
-		end
-		return false, code, string.format("GET main -> status=%s err=%s", tostring(status), tostring(err)), 1
-	end
+Yükleyici fonksiyonu
+	Paylaşıldı.Hazır = yanlış
 
-	-- 2) Doğrulama: boş / çok kısa / web sayfası mı?
-	local head = body:sub(1, 300):lower()
-	if #body < 1000 or head:find("<!doctype", 1, true) or head:find("<html", 1, true) or head:match("^%s*404") then
-		return false, "E08", string.format("size=%d bytes\nhead=%q", #body, body:sub(1, 120)), 2
-	end
+	-- 1) İndir
+	yerel gövde, sondurum, sonhata
+	ipairs(MAIN_URLS) içindeki _, base için do
+		gövde, sondurum, sonhata = httpGet(base .. "?v=" .. math.floor(nowTime() / 60), CFG.MainTimeout)
+		eğer vücut o zaman
+			kırmak
+		son
+	son
+	eğer vücut değilse o zaman
+		false döndür, "net", string.format("GET main -> status=%s err=%s\n%s", tostring(lastStatus),
+			tostring(lastErr), table.concat(MAIN_URLS, "\n"))
+	son
 
-	-- 3) Derleme
-	local okc, fn, cerr = pcall(loadstring, body, "=CR-SETA_Main")
-	if not okc then
-		return false, "E02", tostring(fn), 3
-	end
-	if type(fn) ~= "function" then
-		return false, "E09", tostring(cerr), 3
-	end
+	-- 2) doğru
+	yerel baş = gövde:alt(1, 300):alt())
+	Eğer #body < 1000 ise veya head:find("<!doctype", 1, true) veya head:find("<html", 1, true) ise o zaman
+		false döndür, "exe", string.format("boyut=%d bayt\nbaşlık=%q", #gövde, gövde:alt(1, 120))
+	son
 
-	-- 4) Çalıştırma: hata olursa ayrıntısıyla yakalanır, pencere hazır olana kadar beklenir
-	Loader.cleanup()
-	local finished, ran, rerr = false, false, nil
-	task.spawn(function()
-		local ok, e = xpcall(fn, function(m)
-			return debug.traceback(tostring(m), 2)
-		end)
-		finished, ran, rerr = true, ok, e
-	end)
-	local t0 = os.clock()
-	while os.clock() - t0 < CFG.ReadyTimeout do
-		if Shared.Ready then
-			return true
-		end
-		if Shared.Failed then
-			local f = Shared.Failed
-			Shared.Failed = nil
-			return false, f.code or "E10", f.detail, f.stage or 4
-		end
-		if finished and not ran then
-			return false, "E10", tostring(rerr), 4
-		end
-		task.wait(0.1)
-	end
-	return false, "E16", string.format("finished=%s ran=%s ready=false", tostring(finished), tostring(ran)), 4
-end
+	-- 3) derleme
+	yerel ls = getGlobal(K.K_LS) veya loadstring
+	if type(ls) ~= "function" then
+		false döndür, "exe", "loadstring yok"
+	son
+	yerel okc, fn, cerr = pcall(ls, body, "=CR-SETA_Main")
+	eğer okc değilse veya type(fn) ~= "function" değilse o zaman
+		false döndür, "exe", tostring(cerr veya fn)
+	son
 
--- Başarılı olana ya da kullanıcı kapatana kadar dener
-function Loader.start()
-	Loader.loading = true
-	while true do
-		local ok, code, detail, stage = Loader.load()
-		if ok then
-			Loader.loading = false
-			Errors.Close() -- "tekrar dene" sonrası açık kalan çubuğu kapat
-			Windows.hidden = {}
-			return true
-		end
-		local action = Errors.Show(code, {detail = detail, stage = stage, caps = Net.caps()})
-		if action ~= "retry" then
-			Loader.loading = false
-			return false
-		end
-	end
-end
+	-- 4)
+	Yükleyici.temizleme()
+	yerel tamamlandı, çalıştırıldı, rerr = false, false, nil
+	görev.oluştur(fonksiyon()
+		yerel tamam, e = xpcall(fn, fonksiyon(m)
+			debug.traceback(tostring(m), 2) döndür
+		son)
+		bitti, çalıştı, rerr = true, tamam, e
+	son)
 
--- Normal kod çalışma sırasında hata bildirirse (ör. arayüz kurulumu patlarsa)
-function Shared.Report(code, detail, stage)
-	if Loader.loading then
-		Shared.Failed = {code = code, detail = detail, stage = stage}
-		return
-	end
-	task.spawn(function()
-		if Shared.Lock then
-			pcall(Shared.Lock)
-		end
-		local action = Errors.Show(code, {detail = detail, stage = stage or 4, caps = Net.caps()})
-		if action == "retry" then
-			Loader.cleanup()
-			Loader.start()
-		else
-			Windows.Restore()
-			if Shared.Unlock then
-				pcall(Shared.Unlock)
-			end
-		end
-	end)
-end
+	yerel son tarih = mono() + CFG.ReadyTimeout
+	while mono() < deadline do
+		Shared.Ready ise
+			true döndür
+		son
+		Eğer işlem tamamlandıysa ve çalıştırılmadıysa
+			false döndür, "exe", tostring(rerr)
+		son
+		görev.bekle(0.1)
+	son
+	return false, "exe", string.format("normal kod %d saniye içinde hazır olmuyor", CFG.ReadyTimeout)
+son
 
---------------------------------------------------------------------
--- 5 saniyelik anahtar bekçisi
---  · kendi thread'inde çalışır, hiçbir oyun döngüsünü beklemez
---  · aynı anda tek istek (üst üste binmez), 8 sn zaman aşımı
---  · hata sürerse bekleme 5 -> 10 -> 20 -> 40 -> 60 sn'ye uzar (sunucuyu yormaz)
---  · 429 gelirse Retry-After süresi kadar bekler
---  · hata menüsü açıkken kontrol durur
---  · süre dolumu ağa gitmeden yerelde kontrol edilir
---  · jeton: kapı açıkken "geçersiz" olur, normal kod özellikleri kilitler
---------------------------------------------------------------------
-local Watch = {}
+Yükleyici.başlat fonksiyonu
+	Yükleyici.yükleniyor = true
+	doğru olsa da
+		Yükle.göster(T("sİndir"))
+		yerel ok, tür, detay = Yükleyici.yükle()
+		Eğer uygunsa o zaman
+			Yükleyici.yükleniyor = yanlış
+			Yükle.gizle()
+			true döndür
+		son
+		Yükle.gizle()
+		yerel başlık = tür == "key" ve T("keyError") veya (tür == "net" ve T("netError") veya T("exeError"))
+		yerel ipucu = tür == "key" ve T("keyHint") veya (tür == "net" ve T("netHint") veya T("exeHint"))
+		yerel eylem = showMsg(tür == "ağ" ve "hata" veya "hata", başlık, ipucu .. "\n\n" .. tostring(detay), {
+			{etiket = T("yeniden dene"), renk = C.accent, kimlik = "yeniden dene"},
+			{etiket = T("kapat"), renk = C.button, kimlik = "kapat"},
+		})
+		Eğer eylem "yeniden dene" ise, o zaman
+			Yükleyici.yükleniyor = yanlış
+			yanlış döndür
+		son
+	son
+son
 
--- Süre doldu / anahtar kaldırıldı: özellikleri durdur, yeni anahtar iste
-local function relogin(reason, detail)
-	Token.set(false, 0)
-	if Shared.Lock then
+----------------------------------------------------------------------
+-- 13) Bekçi
+----------------------------------------------------------------------
+-- Jeton kalp atışı: normal kod bununla "yükleyici hayatta" diye anlar
+görev.oluştur(fonksiyon()
+	yerel maden = Paylaşılan
+	Env.CRSETA == benim olduğu sürece
+		görev.bekle(5)
+		pcall(tokenWrite)
+	son
+son)
+
+-- Anahtar listesi kontrolü: anahtar kaldırılırsa / dolarsa kapı tekrar açılır
+yerel fonksiyon yeniden giriş yap(neden, detay)
+	tokenSet(false, 0)
+	Shared.Lock ise
 		pcall(Shared.Lock)
-	end
-	Errors.Show(reason, {detail = detail})
-	local expiry, code = Gate.run()
-	Token.set(true, expiry)
-	Windows.Restore()
-	if Shared.Unlock then
+	son
+	yerel eylem = showMsg("key", reason veya T("keyError"), detail veya "", {
+		{etiket = T("enterKey"), renk = C.accent, kimlik = "key"},
+	})
+	eğer eylem "key" ile aynıysa o zaman
+		nil döndür, nil, "iptal et"
+	son
+	yerel son kullanma tarihi, kod = gate()
+	tokenSet(true, expiry)
+	Shared.Unlock ise
 		pcall(Shared.Unlock)
-	end
-	return expiry, code
-end
+	son
+	iade süresi, kod
+son
 
--- Liste uzun süre ulaşılamazsa: bağlantı gelene kadar kilitli bekler
-local function waitOnline(detail)
-	if Shared.Lock then
-		pcall(Shared.Lock)
-	end
-	while true do
-		Errors.Show("E15", {detail = detail})
-		local keys, _, d = Keys.fetch()
-		if keys then
-			Errors.Close(true)
-			if Shared.Unlock then
-				pcall(Shared.Unlock)
-			end
-			return keys
-		end
-		detail = d
-	end
-end
+görev.oluştur(fonksiyon()
+	yerel maden = Paylaşılan
+	Env.CRSETA == benim olduğu sürece
+		görev.bekle(CFG.Poll)
+		eğer Env.CRSETA benimkine eşitse o zaman
+			geri dönmek
+		son
+		yerel anahtarlar = Anahtarlar.getir()
+		eğer anahtarlar ise o zaman
+			Eğer Session.code ve keys[Session.code] değilse,
+				yerel süre sonu, code = relogin(T("keyError"), "anahtar listeden kaldırıldı")
+				Oturum.son kullanma tarihi, Oturum.kodu = son kullanma tarihi veya 0, kod
+			son
+		başka
+			-- listeye ulaşılamıyor: yerel süre kontrolü, ağ varış devamı
+			Eğer Session.expiry ve nowTime() >= Session.expiry ise
+				yerel süre sonu, kod = relogin(T("keyError"), "anahtar süresi doldu")
+				Oturum.son kullanma tarihi, Oturum.kodu = son kullanma tarihi veya 0, kod
+			son
+		son
+	son
+son)
 
-function Watch.start(code, expiry)
-	local mine = Shared
-	local fails, offlineSince, delay = 0, nil, CFG.Poll
-	task.spawn(function()
-		while Env.CRSETA == mine do
-			task.wait(delay)
-			if Env.CRSETA ~= mine then
-				return
-			end
-			if not Errors.Session then
-				if nowTime() >= expiry then
-					expiry, code = relogin("E13", "key lifetime ended")
-					fails, offlineSince, delay = 0, nil, CFG.Poll
-				else
-					local keys, errCode, detail = Keys.fetch()
-					if keys then
-						fails, offlineSince, delay = 0, nil, CFG.Poll
-						if not keys[code] then
-							expiry, code = relogin("E12", "key removed from list")
-						end
-					else
-						fails += 1
-						offlineSince = offlineSince or os.clock()
-						delay = math.min(CFG.PollMax, CFG.Poll * 2 ^ math.min(fails, 4))
-						if errCode == "E04" then
-							delay = math.max(delay, Keys.retryAfter or 60)
-						end
-						if os.clock() - offlineSince >= CFG.OfflineGrace then
-							Token.set(false, 0)
-							local list = waitOnline(detail)
-							Token.set(true, expiry)
-							fails, offlineSince, delay = 0, nil, CFG.Poll
-							if not list[code] then
-								expiry, code = relogin("E12", "key removed from list")
-							end
-						end
-					end
-				end
-			end
-		end
-	end)
-end
+----------------------------------------------------------------------
+-- 14) Başlangıç
+----------------------------------------------------------------------
+yerel fonksiyon boot()
+	tokenSet(false, 0)
 
---------------------------------------------------------------------
--- Başlangıç
---------------------------------------------------------------------
-local function boot()
-	-- jeton varlığı + kalp atışı: kapı açıkken bile "yükleyici hayatta" bilgisi verir
-	Token.set(false, 0)
-	local mine = Shared
-	task.spawn(function()
-		while Env.CRSETA == mine do
-			task.wait(5)
-			pcall(Token.write)
-		end
-	end)
+	eğer httpCapable() değilse o zaman
+		showMsg("hata", T("exeError"), T("exeHint") .. "\n" .. T("rHttp") .. ": " .. T("no"), {
+			{etiket = T("kapat"), renk = C.button, kimlik = "kapat"},
+		})
+		geri dönmek
+	son
+	eğer loadstringCapable() işlevi çalışmıyorsa
+		showMsg("hata", T("exeError"), T("exeHint") .. "\n" .. T("rLoad") .. ": " .. T("no"), {
+			{etiket = T("kapat"), renk = C.button, kimlik = "kapat"},
+		})
+		geri dönmek
+	son
 
-	local caps = Net.caps()
-	if not caps.http then
-		Errors.Show("E01", {caps = caps, detail = "request / http_request / HttpGet not found"})
-		return
-	end
-	if not caps.loadstring then
-		Errors.Show("E02", {caps = caps, detail = "loadstring is missing or disabled"})
-		return
-	end
+	-- Kayıtlı anahtar mevcut durumda sessiz giriş
+	yerel son kullanma tarihi, kod
+	yerel mağaza = loadStore()
+	eğer store.last ise o zaman
+		yerel ok, e, c = verifyKey(store.last)
+		Eğer uygunsa o zaman
+			son kullanma tarihi, kod = e, c
+			keyToast(T("ok") .. formatRemaining(expiry - nowTime()), C.green)
+		son
+	son
 
-	local expiry, code = Auth.silent()
-	if not expiry then
-		if code == "abort" then
-			return
-		end
-		expiry, code = Gate.run()
-	end
+	son kullanma tarihi geçmemişse o zaman
+		sona erme, kod = kapı()
+		son kullanma tarihi geçmemişse o zaman
+			geri dönmek
+		son
+	son
 
-	-- anahtar doğrulandı: normal koda yetki ver, sonra onu yükle
-	Token.set(true, expiry)
-	if not Loader.start() then
-		Token.set(false, 0)
-		return
-	end
-	Watch.start(code, expiry)
-end
+	-- ANAHTAR ONAYLANDI -> normal koda yetki ver ve çalıştır
+	Oturum.son kullanma tarihi, Oturum.kodu = son kullanma tarihi, kod
+	tokenSet(true, expiry)
+	Loader.start() değilse
+		tokenSet(false, 0)
+		geri dönmek
+	son
+son
 
-local booted, bootErr = xpcall(boot, function(e)
+yerel olarak başlatıldı, bootErr = xpcall(boot, function(e)
 	return debug.traceback(tostring(e), 2)
-end)
-if not booted then
+son)
+başlatılmamışsa
 	warn("[CR-SETA] " .. tostring(bootErr))
-	local text = tostring(bootErr)
-	local code = (text:find("PlayerGui", 1, true) or text:find("Parent", 1, true)) and "E17" or "E18"
-	pcall(function()
-		Errors.Show(code, {detail = text})
-	end)
-end
+	pcall(fonksiyon()
+		showMsg("hata", T("exeError"), tostring(bootErr), {
+			{etiket = T("kapat"), renk = C.button, kimlik = "kapat"},
+		})
+	son)
+son
