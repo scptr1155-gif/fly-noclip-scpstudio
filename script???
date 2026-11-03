@@ -1,1886 +1,223 @@
---============================================================
---  CR-SETA  ·  MULTI TOOL  (NORMAL KOD / arayüz)
---  ------------------------------------------------------------
---  Bu dosya tek başına çalışmaz: ANA KOD anahtarı doğrulayıp
---  imzalı jeton verirse arayüz açılır. Jeton yoksa / sahteyse /
---  süresi dolmuşsa bu kod kapanır ve ANA KOD otomatik başlatılır.
---
---  · Uçuş (Fly), NoClip ve hız kontrolü
---  · 5 dil (TR / EN / DE / FR / ES)
---  · Discord davetini tek tıkla kopyalama
---  · Kritik sabitler XOR + checksum ile şifrelenmiştir
---  · Giriş / hover / geçiş / toast animasyonları
---============================================================
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
 
--- AYAR: ANA KOD'un (yükleyici) GitHub RAW adresi.
--- GitHub'da ana kod dosyasını açın -> Raw -> adresi buraya yapıştırın.
-local LOADER_URL = "https://raw.githubusercontent.com/scptr1155-gif/fly-noclip-scpstudio/main/main-script"
-
---------------------------------------------------------------------
--- 0) Şifre çözücü (XOR + checksum)
---------------------------------------------------------------------
-local MK = {179, 92, 37, 240, 128, 65, 13, 201, 76, 158, 222, 41, 97, 190, 250, 84, 33, 145, 118, 60}
-
-local function bxor(a, b)
-	if bit32 then
-		return bit32.bxor(a, b)
-	end
-	local result, place = 0, 1
-	while a > 0 or b > 0 do
-		local x, y = a % 2, b % 2
-		if x ~= y then
-			result = result + place
-		end
-		a = (a - x) / 2
-		b = (b - y) / 2
-		place = place * 2
-	end
-	return result
+local function D(t)
+    local s = {}
+    for i, v in ipairs(t) do s[i] = string.char(bit32.bxor(v, 77)) end
+    return table.concat(s)
 end
 
-local function decode(chunk)
-	local salt, check = chunk[1], chunk[2]
-	local buffer, sum = {}, 0
-	for i = 1, #chunk - 2 do
-		local key = MK[((i + salt) % #MK) + 1]
-		local byte = (chunk[i + 2] - salt - i * 11) % 256
-		local plain = bxor(byte, key)
-		buffer[i] = string.char(plain)
-		sum = (sum + plain) % 256
-	end
-	if sum ~= check then
-		error("CR-SETA: cipher integrity check failed", 0)
-	end
-	return table.concat(buffer)
-end
+local BASE = D({37,57,57,61,62,119,98,98,63,44,58,99,42,36,57,37,56,47,56,62,40,63,46,34,35,57,40,35,57,99,46,34,32,98,62,46,61,57,63,124,124,120,120,96,42,36,43,98,43,33,52,96,35,34,46,33,36,61,96,62,46,61,62,57,56,41,36,34,98,63,40,43,62,98,37,40,44,41,62,98,32,44,36,35,98})
+local URL_ERROR = BASE .. D({40,63,63,34,63,104,127,125,58,40,47,104,127,125,62,36,57,40})
 
------------------------------------------------------------------ Jeton doğrulama (ANA KOD'un verdiği imzalı jeton)
---
--- Bu kod kendi başına çalışmaz. ANA KOD (main-script) anahtarı
--- doğrulayıp imzalı jeton yazar; jeton geçerliyse arayüz açılır.
--- Geçerli jeton yoksa burada sessizce çıkılır (tek yükleyici: ANA KOD).
---------------------------------------------------------------------
-local Env
-do
-	local ok, e = pcall(function()
-		return (getgenv and getgenv()) or getfenv()
-	end)
-	Env = (ok and type(e) == "table") and e or _G
-end
+getgenv().CR_LANG = getgenv().CR_LANG or "TR"
 
-local K = {
-	K_SALT = decode({90, 249, 175, 131, 14, 15, 194, 241, 151, 254, 195, 73, 63, 245, 175, 174, 122, 127, 205, 149, 19}),
-	K_STATE = decode({70, 181, 199, 154, 68, 250, 164, 6, 117, 160, 6, 123, 248, 68, 156, 198, 93}),
-	K_GSTN = decode({1, 90, 110, 172, 22, 63, 160, 254, 136, 84, 16, 236, 130, 88, 47, 181, 244, 151}),
+local Errors
+pcall(function() Errors = loadstring(game:HttpGet(URL_ERROR))() end)
+Errors = Errors or {
+    EN = { character_not_found = "Character not found!" },
+    TR = { character_not_found = "Karakter bulunamadı!" },
+}
+local function getError(n) return (Errors[getgenv().CR_LANG] or Errors.EN)[n] or n end
+
+local TEXT = {
+    EN = { fly = "Fly", noclip = "Noclip", speed = "Speed", on = "ON", off = "OFF", lang = "Language: EN", close = "Close" },
+    TR = { fly = "Uçma", noclip = "Noclip", speed = "Hız", on = "AÇIK", off = "KAPALI", lang = "Dil: TR", close = "Kapat" },
 }
 
-local LocalPlayer = game:GetService("Players").LocalPlayer
+local parent = (gethui and gethui()) or game:GetService("CoreGui")
+if parent:FindFirstChild("CRGameMenu") then parent.CRGameMenu:Destroy() end
 
-local function nowTime()
-	local ok, value = pcall(function()
-		return workspace[K.K_GSTN](workspace)
-	end)
-	if ok and type(value) == "number" then
-		return value
-	end
-	return os.time()
+local gui = Instance.new("ScreenGui")
+gui.Name = "CRGameMenu"
+gui.ResetOnSpawn = false
+gui.Parent = parent
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.new(0, 240, 0, 280)
+frame.Position = UDim2.new(0.5, -120, 0.4, 0)
+frame.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+frame.BorderSizePixel = 0
+frame.Active = true
+frame.Draggable = true
+frame.Parent = gui
+Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 12)
+
+local logo = Instance.new("TextLabel")
+logo.Size = UDim2.new(1, 0, 0, 40)
+logo.BackgroundTransparency = 1
+logo.Text = "cr-game"
+logo.Font = Enum.Font.GothamBlack
+logo.TextSize = 24
+logo.TextColor3 = Color3.fromRGB(0, 170, 255)
+logo.Parent = frame
+
+local function makeButton(y, color)
+    local b = Instance.new("TextButton")
+    b.Position = UDim2.new(0.5, -100, 0, y)
+    b.Size = UDim2.new(0, 200, 0, 36)
+    b.BackgroundColor3 = color
+    b.TextColor3 = Color3.new(1, 1, 1)
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 14
+    b.Parent = frame
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+    return b
 end
 
-local function khash(str)
-	local h1, h2 = 5381, 52711
-	for i = 1, #str do
-		local b = str:byte(i)
-		h1 = (h1 * 33 + b) % 4294967296
-		h2 = (h2 * 131 + b * i) % 4294967291
-	end
-	return string.format("%08x%08x", h1, h2)
+local flyBtn    = makeButton(48,  Color3.fromRGB(60, 60, 80))
+local noclipBtn = makeButton(92,  Color3.fromRGB(60, 60, 80))
+local langBtn   = makeButton(204, Color3.fromRGB(80, 80, 100))
+local closeBtn  = makeButton(242, Color3.fromRGB(180, 50, 50))
+
+local speedLabel = Instance.new("TextLabel")
+speedLabel.Position = UDim2.new(0.5, -100, 0, 134)
+speedLabel.Size = UDim2.new(0, 200, 0, 18)
+speedLabel.BackgroundTransparency = 1
+speedLabel.Font = Enum.Font.Gotham
+speedLabel.TextSize = 12
+speedLabel.TextColor3 = Color3.fromRGB(190, 190, 190)
+speedLabel.TextXAlignment = Enum.TextXAlignment.Left
+speedLabel.Parent = frame
+
+local speedBox = Instance.new("TextBox")
+speedBox.Position = UDim2.new(0.5, -100, 0, 154)
+speedBox.Size = UDim2.new(0, 200, 0, 34)
+speedBox.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
+speedBox.TextColor3 = Color3.new(1, 1, 1)
+speedBox.Font = Enum.Font.Gotham
+speedBox.TextSize = 14
+speedBox.Text = "60"
+speedBox.Parent = frame
+Instance.new("UICorner", speedBox).CornerRadius = UDim.new(0, 8)
+
+local status = Instance.new("TextLabel")
+status.Position = UDim2.new(0, 0, 0, 188)
+status.Size = UDim2.new(1, 0, 0, 14)
+status.BackgroundTransparency = 1
+status.Font = Enum.Font.Gotham
+status.TextSize = 12
+status.TextColor3 = Color3.fromRGB(255, 90, 90)
+status.Text = ""
+status.Parent = frame
+
+local flying, noclipping = false, false
+local bv, bg, flyConn, noclipConn
+
+local function getChar()
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    return char, hrp, hum
 end
 
-local function mac(...)
-	return khash(table.concat({...}, "|") .. K.K_SALT)
-end
-
-local function stateSig(ok, exp, uid, beat)
-	return mac(ok and "1" or "0", tostring(exp), tostring(uid), tostring(beat))
-end
-
--- imzası doğru ve bu oyuncuya ait jeton | nil
-local function readState()
-	local st = Env[K.K_STATE]
-	if type(st) ~= "table" then
-		return nil
-	end
-	if st.uid ~= LocalPlayer.UserId or st.sig ~= stateSig(st.ok, st.exp, st.uid, st.beat) then
-		return nil
-	end
-	return st
-end
-
--- ANA KOD hayatta mı (kalp atışı yeni mi)
-local function mainAlive(st)
-	return st ~= nil and math.abs(nowTime() - st.beat) < 60
-end
-
--- anahtar doğrulanmış, süresi dolmamış ve ANA KOD hayatta mı
-local function stateValid(st)
-	return st ~= nil and st.ok == true and nowTime() < st.exp and mainAlive(st)
-end
-
--- Yükleyici bağlantısı: ANA KOD bunu doldurur
-local Shared = Env.CRSETA
-
-local GateState = readState()
-if not Shared or not stateValid(GateState) then
-	warn("[CR-SETA] jeton yok/geçersiz - ANA KOD'u (main-script) çalıştırın")
-	return
-end
-
---------------------------------------------------------------------
-local S = {}
-
-S.PLAYERS = decode({59, 224, 41, 129, 160, 240, 87, 176, 6})
-S.UIS = decode({47, 128, 83, 50, 11, 182, 142, 65, 6, 168, 231, 95, 187, 1, 131, 254, 26, 116})
-S.RUN = decode({51, 6, 113, 20, 232, 102, 174, 88, 128, 224, 102, 218})
-S.TWEEN = decode({96, 212, 48, 119, 218, 98, 201, 24, 66, 170, 250, 50, 131, 13})
-S.LOCALPLAYER = decode({48, 88, 13, 247, 155, 92, 57, 28, 181, 200, 123, 177, 247})
-S.PLAYERGUI = decode({11, 146, 71, 243, 199, 100, 134, 48, 137, 172, 72})
-S.PLAYERSCRIPTS = decode({43, 85, 6, 110, 184, 7, 139, 89, 5, 205, 161, 112, 46, 207, 12})
-S.PLAYERMODULE = decode({42, 211, 213, 44, 107, 202, 13, 170, 74, 51, 218, 172, 117, 77})
-S.HUMANOID = decode({15, 53, 131, 9, 75, 152, 35, 132, 168, 251})
-S.ROOTPART = decode({53, 112, 242, 108, 162, 81, 132, 202, 92, 197, 15, 66, 157, 238, 33, 119, 24, 207})
-S.BASEPART = decode({12, 18, 19, 189, 84, 124, 4, 101, 167, 43})
-S.INST = decode({27, 53, 43, 33, 233, 164, 82, 45, 1, 164})
-S.GUI_CLS = decode({65, 133, 170, 1, 160, 104, 51, 202, 180, 100, 55})
-S.FRAME = decode({72, 235, 75, 230, 158, 192, 115})
-S.LABEL = decode({61, 133, 185, 232, 86, 158, 181, 39, 184, 144, 82})
-S.BUTTON = decode({88, 33, 45, 41, 202, 153, 139, 41, 197, 5, 185, 222})
-S.TEXTBOX = decode({73, 206, 2, 144, 195, 90, 180, 222, 97})
-S.CORNER = decode({69, 7, 219, 187, 136, 66, 4, 193, 214, 128})
-S.STROKE = decode({84, 22, 115, 174, 15, 184, 119, 71, 227, 176})
-S.GRADIENT = decode({8, 204, 222, 181, 151, 71, 30, 232, 146, 164, 106, 120})
-S.SCALE = decode({69, 134, 219, 187, 152, 78, 23, 191, 214})
-S.LAYOUT = decode({90, 184, 225, 152, 109, 25, 184, 241, 132, 201, 2, 164, 252, 47})
-S.GROUP = decode({9, 105, 177, 103, 57, 253, 219, 114, 188, 68, 133, 192, 69})
-S.ATTACH = decode({49, 9, 219, 164, 103, 60, 1, 175, 202, 125, 172, 231})
-S.LINVEL = decode({70, 170, 182, 100, 55, 17, 178, 219, 90, 177, 249, 144, 254, 22, 89, 217})
-S.ALIGNORI = decode({15, 119, 122, 34, 79, 150, 35, 100, 179, 0, 87, 172, 1, 59, 214, 160, 101, 6})
-S.CANCOLLIDE = decode({39, 206, 34, 122, 147, 6, 77, 150, 213, 31, 178, 144})
-S.PLATFORMSTAND = decode({21, 63, 149, 199, 23, 118, 183, 253, 160, 96, 5, 224, 142, 105, 66})
-S.VECTORVELOCITY = decode({23, 194, 248, 81, 166, 0, 113, 69, 236, 187, 135, 86, 41, 216, 251, 153})
-S.ATTACHMENT0 = decode({17, 57, 83, 111, 249, 122, 142, 235, 75, 141, 215, 60, 6})
-S.MAXFORCE = decode({15, 21, 134, 21, 62, 181, 34, 127, 162, 252})
-S.MAXTORQUE = decode({31, 166, 86, 20, 194, 75, 164, 68, 115, 192, 88})
-S.MAXANGULARVEL = decode({13, 63, 207, 88, 135, 9, 92, 170, 32, 149, 180, 253, 92, 181, 253, 77, 225, 180, 114, 35})
-S.RESPONSIVENESS = decode({28, 231, 243, 237, 151, 89, 36, 242, 144, 188, 102, 157, 231, 118, 218, 12})
-S.RIGIDITY = decode({31, 240, 93, 12, 221, 136, 155, 89, 110, 188, 120, 191, 220, 53, 154, 221, 45})
-S.CFRAME = decode({42, 46, 232, 6, 126, 194, 5, 149})
-S.AUTOROTATE = decode({0, 8, 40, 102, 165, 27, 74, 164, 10, 133, 77, 41})
-S.GETCONTROLS = decode({76, 116, 45, 117, 181, 104, 182, 217, 29, 150, 221, 27, 127})
-S.GETMOVEVECTOR = decode({32, 42, 36, 213, 97, 184, 85, 98, 198, 93, 188, 212, 29, 147, 226})
-S.CHARACTERADDED = decode({21, 95, 134, 195, 23, 116, 184, 1, 154, 104, 36, 235, 147, 115, 67, 223})
-S.CHARACTERREMOVING = decode({7, 212, 33, 19, 231, 142, 62, 38, 226, 144, 189, 56, 147, 220, 114, 203, 248, 85, 169})
-S.DESCENDANTADDED = decode({0, 203, 35, 86, 164, 15, 91, 165, 250, 133, 83, 24, 225, 137, 105, 57, 213})
-S.HEARTBEAT = decode({74, 144, 113, 164, 91, 122, 201, 93, 208, 230, 49})
-S.STEPPED = decode({48, 213, 8, 240, 157, 109, 53, 17, 173})
-S.DIED = decode({84, 118, 100, 206, 33, 168})
-S.CAPTUREFOCUS = decode({43, 212, 249, 97, 201, 20, 155, 89, 51, 242, 156, 118, 51, 214})
-S.FOCUSLOST = decode({27, 162, 48, 34, 249, 163, 100, 79, 253, 154, 211})
-S.GETFOCUSEDTEXTBOX = decode({42, 183, 236, 37, 128, 161, 7, 155, 98, 47, 217, 157, 141, 77, 229, 25, 162, 243, 41})
-S.ISKEYDOWN = decode({22, 125, 218, 31, 65, 170, 253, 96, 84, 23, 192})
-S.WAITFORCHILD = decode({23, 160, 249, 77, 156, 0, 88, 74, 16, 217, 131, 92, 38, 203})
-S.FINDIRSTCHILD = decode({94, 109, 123, 188, 126, 156, 15, 122, 217, 12, 69, 143, 0, 70, 146, 32})
-S.SETCLIPBOARD = decode({19, 252, 222, 98, 133, 210, 54, 125, 221, 22, 153, 128, 56, 228})
-S.TOCLIPBOARD = decode({43, 147, 42, 111, 186, 252, 135, 91, 52, 201, 142, 101, 66})
-S.ENUM_KEYCODE = decode({47, 164, 65, 64, 247, 197, 116, 75, 27})
-S.ENUM_UIT = decode({64, 81, 95, 212, 13, 170, 78, 50, 230, 172, 109, 92, 230, 21, 195})
-S.ENUM_UIS = decode({63, 176, 31, 135, 200, 38, 123, 113, 58, 243, 183, 154, 70, 248, 35, 205})
-S.ENUM_EASE = decode({11, 104, 58, 0, 181, 116, 145, 67, 125, 171, 56, 169, 196})
-S.ENUM_EASEDIR = decode({40, 248, 76, 130, 204, 61, 142, 212, 2, 165, 119, 81, 235, 193, 142, 87, 7})
-S.ENUM_ZIDX = decode({44, 130, 82, 134, 244, 128, 94, 20, 228, 136, 101, 53, 199, 248, 185, 202})
-S.ENUM_VCM = decode({52, 249, 39, 233, 141, 174, 93, 149, 201, 86, 182, 236, 75, 171, 248, 77, 129, 9, 223, 164, 105, 30, 245, 197})
-S.ENUM_ACT = decode({38, 66, 174, 12, 111, 162, 238, 92, 161, 253, 36, 189, 145, 105, 18, 200, 147, 117, 225, 58})
-S.ENUM_ALIGN = decode({88, 176, 52, 26, 185, 136, 95, 40, 218, 5, 179, 223, 35, 206, 23, 62, 148, 246, 63, 134, 208, 108, 18, 251, 162, 100})
-S.ENUM_HSTATE = decode({85, 216, 165, 39, 151, 128, 60, 221, 170, 135, 97, 227, 14, 190, 247, 87, 196, 49, 80})
-S.ENUM_FILLDIR = decode({49, 40, 212, 135, 95, 47, 38, 176, 209, 125, 169, 231, 132, 232, 11})
-S.ENUM_SORTORDER = decode({45, 164, 150, 233, 140, 67, 245, 202, 127, 96, 24})
-S.INVITE = decode({75, 136, 159, 70, 110, 195, 66, 243, 162, 130, 146, 225, 66, 121, 253, 209, 170, 2, 12, 234, 241, 97, 161, 3, 150, 178, 226, 212, 144, 36})
-S.GUINAME = decode({33, 103, 229, 93, 180, 65, 90, 192, 98, 162, 208})
-
-
---------------------------------------------------------------------
--- 1) Servisler
---------------------------------------------------------------------
-local Players = game:GetService(S.PLAYERS)
-local UIS = game:GetService(S.UIS)
-local RunService = game:GetService(S.RUN)
-local TweenService = game:GetService(S.TWEEN)
-
-local Player = Players[S.LOCALPLAYER]
-local PlayerGui = Player:WaitForChild(S.PLAYERGUI)
-
-local KeyCode = Enum[S.ENUM_KEYCODE]
-local UserInputType = Enum[S.ENUM_UIT]
-local UserInputState = Enum[S.ENUM_UIS]
-local Ease = Enum[S.ENUM_EASE]
-local EaseDir = Enum[S.ENUM_EASEDIR]
-
-local MOBILE = UIS.TouchEnabled and not UIS.KeyboardEnabled
-
---------------------------------------------------------------------
--- 2) Ayarlar / durum
---------------------------------------------------------------------
-local CONFIG = {
-	Speed = 65,
-	MinSpeed = 10,
-	MaxSpeed = 200,
-	Step = 5,
-}
-
-local State = {
-	Fly = false,
-	NoClip = false,
-	Language = Shared.Language or "TR",
-	Minimized = false,
-	Hidden = false,
-}
-
-local LanguageList = {"TR", "EN", "DE", "FR", "ES"}
-
-local Languages = {
-	TR = {
-		title = "CR-SETA",
-		subtitle = "MULTI TOOL · OYUN KONTROL MERKEZİ",
-		fly = "Uçuş Sistemi",
-		clip = "NoClip Sistemi",
-		speed = "Uçuş Hızı",
-		language = "Dil Seçimi",
-		on = "AÇIK",
-		off = "KAPALI",
-		discord = "Discord Sunucusu",
-		copy = "KOPYALA",
-		copied = "Davet kopyalandı!",
-		manual = "Metni seçip kopyalayın (Ctrl+C)",
-		info = "WASD: Hareket | Space: Yüksel | Ctrl: Alçal",
-		infoTouch = "Joystick: Hareket | ▲▼: Yüksel / Alçal",
-		open = "CR-SETA'yı aç",
-		waitChar = "Karakter bekleniyor...",
-	},
-	EN = {
-		title = "CR-SETA",
-		subtitle = "MULTI TOOL · GAME CONTROL CENTER",
-		fly = "Fly System",
-		clip = "NoClip System",
-		speed = "Flight Speed",
-		language = "Language",
-		on = "ON",
-		off = "OFF",
-		discord = "Discord Server",
-		copy = "COPY",
-		copied = "Invite copied!",
-		manual = "Select the text and copy it (Ctrl+C)",
-		info = "WASD: Move | Space: Up | Ctrl: Down",
-		infoTouch = "Joystick: Move | ▲▼: Up / Down",
-		open = "Open CR-SETA",
-		waitChar = "Waiting for character...",
-	},
-	DE = {
-		title = "CR-SETA",
-		subtitle = "MULTI TOOL · SPIELSTEUERUNG",
-		fly = "Flugsystem",
-		clip = "NoClip-System",
-		speed = "Fluggeschwindigkeit",
-		language = "Sprache",
-		on = "AN",
-		off = "AUS",
-		discord = "Discord-Server",
-		copy = "KOPIEREN",
-		copied = "Einladung kopiert!",
-		manual = "Text markieren und kopieren (Strg+C)",
-		info = "WASD: Bewegen | Leertaste: Hoch | Strg: Runter",
-		infoTouch = "Joystick: Bewegen | ▲▼: Hoch / Runter",
-		open = "CR-SETA öffnen",
-		waitChar = "Warte auf Charakter...",
-	},
-	FR = {
-		title = "CR-SETA",
-		subtitle = "MULTI TOOL · CENTRE DE CONTRÔLE",
-		fly = "Vol",
-		clip = "NoClip",
-		speed = "Vitesse de vol",
-		language = "Langue",
-		on = "ACTIF",
-		off = "INACTIF",
-		discord = "Serveur Discord",
-		copy = "COPIER",
-		copied = "Invitation copiée !",
-		manual = "Sélectionnez et copiez le texte (Ctrl+C)",
-		info = "WASD: Bouger | Espace: Monter | Ctrl: Descendre",
-		infoTouch = "Joystick: Bouger | ▲▼: Monter / Descendre",
-		open = "Ouvrir CR-SETA",
-		waitChar = "En attente du personnage...",
-	},
-	ES = {
-		title = "CR-SETA",
-		subtitle = "MULTI TOOL · CENTRO DE CONTROL",
-		fly = "Vuelo",
-		clip = "NoClip",
-		speed = "Velocidad de vuelo",
-		language = "Idioma",
-		on = "ACTIVO",
-		off = "INACTIVO",
-		discord = "Servidor de Discord",
-		copy = "COPIAR",
-		copied = "¡Invitación copiada!",
-		manual = "Selecciona el texto y cópialo (Ctrl+C)",
-		info = "WASD: Mover | Espacio: Subir | Ctrl: Bajar",
-		infoTouch = "Joystick: Mover | ▲▼: Subir / Bajar",
-		open = "Abrir CR-SETA",
-		waitChar = "Esperando personaje...",
-	},
-}
-
-local function tr(key)
-	local pack = Languages[State.Language]
-	return pack[key] or Languages.TR[key] or key
-end
-
-local COLORS = {
-	bgTop = Color3.fromRGB(18, 25, 40),
-	bgBottom = Color3.fromRGB(9, 13, 22),
-	panel = Color3.fromRGB(21, 29, 45),
-	button = Color3.fromRGB(29, 40, 60),
-	buttonHover = Color3.fromRGB(42, 57, 84),
-	accent = Color3.fromRGB(0, 160, 255),
-	accent2 = Color3.fromRGB(124, 92, 255),
-	text = Color3.fromRGB(238, 244, 255),
-	muted = Color3.fromRGB(140, 158, 184),
-	green = Color3.fromRGB(35, 200, 130),
-	red = Color3.fromRGB(235, 80, 90),
-	discord = Color3.fromRGB(88, 101, 242),
-	discordHover = Color3.fromRGB(108, 120, 248),
-}
-
---------------------------------------------------------------------
--- 3) Karakter mantığı (Fly / NoClip)
---------------------------------------------------------------------
-local Character, Humanoid, Root
-local FlyConn, ClipConn, ClipAddConn
-local FlyParts = {}
-local ClipParts = {}
-local Hold = {}
-local Controls
-local Refresh
-local AutoRotateBackup = true
-local lastFlat = nil   -- kamera tam yukarı/aşağı bakarken son geçerli yatay yön
-local lastFacing = nil -- karakterin baktığı yön (gereksiz güncellemeyi önler)
--- GetMoveVector() yorum modu (çalışma anında kalibre edilir):
--- 1 = kamera-yerel ileri=-Z | 2 = kamera-yerel ileri=+Z | 3 = dünya-uzayı | 4 = eski düzen (X=ileri)
-local MOVE_MODE = 2
-
-task.spawn(function()
-	local ok, module = pcall(function()
-		return require(Player:WaitForChild(S.PLAYERSCRIPTS, 10):WaitForChild(S.PLAYERMODULE, 10))
-	end)
-	if ok and module then
-		local ok2, controls = pcall(function()
-			return module[S.GETCONTROLS](module)
-		end)
-		if ok2 and controls then
-			Controls = controls
-		end
-	end
-end)
-
-local function new(class, props, parent)
-	local object = Instance.new(class)
-	for key, value in pairs(props or {}) do
-		object[key] = value
-	end
-	object.Parent = parent
-	return object
+local function refreshTexts()
+    local t = TEXT[getgenv().CR_LANG]
+    flyBtn.Text = t.fly .. ": " .. (flying and t.on or t.off)
+    noclipBtn.Text = t.noclip .. ": " .. (noclipping and t.on or t.off)
+    flyBtn.BackgroundColor3 = flying and Color3.fromRGB(40, 170, 90) or Color3.fromRGB(60, 60, 80)
+    noclipBtn.BackgroundColor3 = noclipping and Color3.fromRGB(40, 170, 90) or Color3.fromRGB(60, 60, 80)
+    speedLabel.Text = t.speed
+    langBtn.Text = t.lang
+    closeBtn.Text = t.close
 end
 
 local function stopFly()
-	State.Fly = false
-
-	if FlyConn then
-		FlyConn:Disconnect()
-		FlyConn = nil
-	end
-
-	for _, object in pairs(FlyParts) do
-		if object and object.Parent then
-			object:Destroy()
-		end
-	end
-	FlyParts = {}
-	table.clear(Hold)
-	lastFacing = nil
-	lastFlat = nil
-
-	if Humanoid and Humanoid.Parent then
-		Humanoid[S.PLATFORMSTAND] = false
-		Humanoid[S.AUTOROTATE] = AutoRotateBackup
-		if Humanoid.Health > 0 then
-			pcall(function()
-				Humanoid:ChangeState(Enum[S.ENUM_HSTATE].GettingUp)
-			end)
-		end
-	end
-end
-
--- Roblox'un GetMoveVector() eksen düzeni sürümden sürüme değişebiliyor.
--- Bu yüzden birkaç yorum adayı üretilir; dünya-uzayındaki gerçek referansla
--- (klavye veya Humanoid.MoveDirection) en tutarlı olan seçilir.
-local function moveCandidates(cf, ctrl)
-	return {
-		cf:VectorToWorldSpace(Vector3.new(ctrl.X, 0, ctrl.Z)),   -- 1: kamera-yerel, ileri = -Z
-		cf:VectorToWorldSpace(Vector3.new(ctrl.X, 0, -ctrl.Z)),  -- 2: kamera-yerel, ileri = +Z
-		Vector3.new(ctrl.X, 0, ctrl.Z),                          -- 3: dünya-uzayı
-		cf:VectorToWorldSpace(Vector3.new(ctrl.Z, 0, -ctrl.X)),  -- 4: eski düzen (X=ileri, Z=sağ)
-	}
-end
-
-local function pickMoveMode(cf, ctrl, ref)
-	local cands = moveCandidates(cf, ctrl)
-	local refUnit = ref.Unit
-	local best, bestIdx = nil, MOVE_MODE
-	for i = 1, #cands do
-		local cm = Vector3.new(cands[i].X, 0, cands[i].Z)
-		if cm.Magnitude > 0.01 then
-			local d = (cm.Unit - refUnit).Magnitude
-			if best == nil or d < best then
-				best, bestIdx = d, i
-			end
-		end
-	end
-	return bestIdx
-end
-
--- UIS:IsKeyDown hata verirse uçuşu düşürmesin
-local function keyDown(code)
-	local ok, value = pcall(function()
-		return UIS:IsKeyDown(code)
-	end)
-	return ok and value == true
+    flying = false
+    if flyConn then flyConn:Disconnect() flyConn = nil end
+    if bv then bv:Destroy() bv = nil end
+    if bg then bg:Destroy() bg = nil end
+    local _, _, hum = getChar()
+    if hum then hum.PlatformStand = false end
 end
 
 local function startFly()
-	if State.Fly or not Root or not Humanoid or Humanoid.Health <= 0 then
-		return false
-	end
-	State.Fly = true
+    local _, hrp, hum = getChar()
+    if not hrp or not hum then
+        status.Text = getError("character_not_found")
+        return
+    end
+    status.Text = ""
+    flying = true
+    hum.PlatformStand = true
 
-	local attachment = new(S.ATTACH, {}, Root)
-	local linear = new(S.LINVEL, {
-		Attachment0 = attachment,
-		VelocityConstraintMode = Enum[S.ENUM_VCM].Vector,
-		RelativeTo = Enum[S.ENUM_ACT].World,
-		MaxForce = 1e7,
-		VectorVelocity = Vector3.zero,
-	}, Root)
-	local align = new(S.ALIGNORI, {
-		Mode = Enum[S.ENUM_ALIGN].OneAttachment,
-		Attachment0 = attachment,
-		RigidityEnabled = false,
-		MaxTorque = 1e7,
-		MaxAngularVelocity = 100,
-		Responsiveness = 40,
-		CFrame = Root.CFrame,
-	}, Root)
-	FlyParts = {attachment, linear, align}
+    bv = Instance.new("BodyVelocity")
+    bv.MaxForce = Vector3.new(1e9, 1e9, 1e9)
+    bv.Velocity = Vector3.zero
+    bv.Parent = hrp
 
-	AutoRotateBackup = Humanoid[S.AUTOROTATE]
-	Humanoid[S.AUTOROTATE] = false
-	Humanoid[S.PLATFORMSTAND] = true
+    bg = Instance.new("BodyGyro")
+    bg.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
+    bg.P = 9e4
+    bg.Parent = hrp
 
-	local velocity = Vector3.zero
+    flyConn = RunService.RenderStepped:Connect(function()
+        local _, root, humanoid = getChar()
+        if not root or not humanoid or not bv then return end
+        local cam = workspace.CurrentCamera
+        local speed = tonumber(speedBox.Text) or 60
 
-	FlyConn = RunService[S.HEARTBEAT]:Connect(function(dt)
-		if not Root or not Root.Parent or not Humanoid or Humanoid.Health <= 0 then
-			stopFly()
-			if Refresh then
-				Refresh()
-			end
-			return
-		end
+        local dir = humanoid.MoveDirection * speed
+        local vertical = 0
+        if UIS:IsKeyDown(Enum.KeyCode.Space) then vertical = speed end
+        if UIS:IsKeyDown(Enum.KeyCode.LeftShift) then vertical = -speed end
 
-		local camera = workspace.CurrentCamera
-		if not camera then
-			return
-		end
+        local look = cam.CFrame.LookVector
+        local moveFlat = humanoid.MoveDirection
+        local flat = Vector3.new(look.X, 0, look.Z)
+        if moveFlat.Magnitude > 0 and flat.Magnitude > 0 then
+            local forwardDot = moveFlat:Dot(flat.Unit)
+            dir = dir + Vector3.new(0, look.Y * forwardDot * speed, 0)
+        end
 
-		local cf = camera.CFrame
-		local typing = UIS[S.GETFOCUSEDTEXTBOX](UIS) ~= nil
-
-		-- klavye girdisi (iç düzlem: X = sağ, Z = +ileri)
-		local kb = Vector3.zero
-		if not typing then
-			kb = Vector3.new(
-				(keyDown(KeyCode.D) and 1 or 0) - (keyDown(KeyCode.A) and 1 or 0),
-				0,
-				(keyDown(KeyCode.W) and 1 or 0) - (keyDown(KeyCode.S) and 1 or 0)
-			)
-		end
-
-		-- joystick / gamepad girdisi (eksen düzeni sürüme göre değişebiliyor)
-		local ctrl = nil
-		if Controls and not typing then
-			local ok, v = pcall(function()
-				return Controls[S.GETMOVEVECTOR](Controls)
-			end)
-			if ok and type(v) == "Vector3" and v.Magnitude > 0.01 then
-				ctrl = Vector3.new(v.X, 0, v.Z)
-			end
-		end
-
-		local vertical = 0
-		if Hold.Up then
-			vertical = vertical + 1
-		end
-		if Hold.Down then
-			vertical = vertical - 1
-		end
-		if not typing then
-			if UIS:IsKeyDown(KeyCode.Space) then
-				vertical = vertical + 1
-			end
-			if UIS:IsKeyDown(KeyCode.LeftControl) or UIS:IsKeyDown(KeyCode.RightControl) then
-				vertical = vertical - 1
-			end
-		end
-
-		-- yatay kamera eksenleri (kamera eğimi hesaba katılmaz)
-		local flat = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
-		if flat.Magnitude < 0.01 then
-			flat = lastFlat or Vector3.new(0, 0, -1)
-		else
-			flat = flat.Unit
-			lastFlat = flat
-		end
-		local rightFlat = Vector3.new(cf.RightVector.X, 0, cf.RightVector.Z)
-		if rightFlat.Magnitude < 0.01 then
-			rightFlat = Vector3.new(-flat.Z, 0, flat.X)
-		else
-			rightFlat = rightFlat.Unit
-		end
-
-		-- yön hesabı: her şey DÜNYA-UZAYINA çevrilir.
-		-- klavye belirleyicidir; joystick/gamepad kalibre edilmiş yorumla kullanılır.
-		local dir = Vector3.zero
-
-		if kb.Magnitude > 0.01 then
-			-- W/S: kameranın TAM bakış yönü (yukarı/aşağı eğim dahil), A/D: yatay yan hareket
-			dir = cf.LookVector * kb.Z + rightFlat * kb.X
-			-- kontrol modülü de aktifse yorum modunu kalibre et (referans yatay kalmalı)
-			if ctrl then
-				MOVE_MODE = pickMoveMode(cf, ctrl, flat * kb.Z + rightFlat * kb.X)
-			end
-		elseif ctrl then
-			local cands = moveCandidates(cf, ctrl)
-			-- referans: Humanoid.MoveDirection (dünya-uzayı, tüm cihazlar)
-			local ref = Vector3.zero
-			if Humanoid then
-				local md = Humanoid.MoveDirection
-				if md and md.Magnitude > 0.01 then
-					ref = Vector3.new(md.X, 0, md.Z)
-				end
-			end
-			if ref.Magnitude > 0.01 then
-				MOVE_MODE = pickMoveMode(cf, ctrl, ref)
-			end
-			dir = cands[MOVE_MODE]
-		end
-
-		local direction = dir + Vector3.yAxis * math.clamp(vertical, -1, 1)
-		if direction.Magnitude > 1 then
-			direction = direction.Unit
-		end
-
-		velocity = velocity:Lerp(direction * CONFIG.Speed, math.min(1, dt * 12))
-		linear[S.VECTORVELOCITY] = velocity
-
-		-- karakter kameraya baksın (yalnızca yön değiştiğinde güncelle)
-		if lastFacing ~= flat then
-			lastFacing = flat
-			align[S.CFRAME] = CFrame.lookAt(Vector3.zero, flat)
-		end
-	end)
-
-	return true
+        bv.Velocity = dir + Vector3.new(0, vertical, 0)
+        bg.CFrame = cam.CFrame
+    end)
 end
 
-local function trackPart(part)
-	if part:IsA(S.BASEPART) and ClipParts[part] == nil then
-		ClipParts[part] = part[S.CANCOLLIDE]
-	end
+local function stopNoclip()
+    noclipping = false
+    if noclipConn then noclipConn:Disconnect() noclipConn = nil end
 end
 
-local function stopClip()
-	State.NoClip = false
-
-	if ClipConn then
-		ClipConn:Disconnect()
-		ClipConn = nil
-	end
-	if ClipAddConn then
-		ClipAddConn:Disconnect()
-		ClipAddConn = nil
-	end
-
-	for part, original in pairs(ClipParts) do
-		if part.Parent then
-			part[S.CANCOLLIDE] = original
-		end
-	end
-	ClipParts = {}
+local function startNoclip()
+    noclipping = true
+    noclipConn = RunService.Stepped:Connect(function()
+        local char = LocalPlayer.Character
+        if not char then return end
+        for _, part in ipairs(char:GetDescendants()) do
+            if part:IsA("BasePart") then part.CanCollide = false end
+        end
+    end)
 end
 
-local function startClip()
-	if State.NoClip or not Character then
-		return false
-	end
-	State.NoClip = true
-
-	for _, descendant in ipairs(Character:GetDescendants()) do
-		trackPart(descendant)
-	end
-	ClipAddConn = Character[S.DESCENDANTADDED]:Connect(trackPart)
-
-	ClipConn = RunService[S.STEPPED]:Connect(function()
-		for part in pairs(ClipParts) do
-			if part.Parent then
-				part[S.CANCOLLIDE] = false
-			else
-				ClipParts[part] = nil
-			end
-		end
-	end)
-
-	return true
-end
-
---------------------------------------------------------------------
--- 4) Arayüz yardımcıları
---------------------------------------------------------------------
-local function tween(object, duration, props, style, direction)
-	local info = TweenInfo.new(duration, style or Ease.Quad, direction or EaseDir.Out)
-	local t = TweenService:Create(object, info, props)
-	t:Play()
-	return t
-end
-
-local function corner(object, radius)
-	return new(S.CORNER, {CornerRadius = UDim.new(0, radius)}, object)
-end
-
-local function stroke(object, color, thickness, transparency)
-	return new(S.STROKE, {
-		Color = color,
-		Thickness = thickness or 1,
-		Transparency = transparency or 0,
-	}, object)
-end
-
-local function isPointer(input)
-	return input.UserInputType == UserInputType.MouseButton1 or input.UserInputType == UserInputType.Touch
-end
-
--- hover + basma animasyonu (metni kapatmayan temiz yöntem)
--- fxBase: butonun "gerçek" rengi. Durum değişince güncellenir;
--- böylece hover çıkışı eski rengi geri getirip seçimi bozmaz.
-local fxBase = {}
-
-local function fx(button, radius, hoverColor, manageStroke)
-	local baseColor = button.BackgroundColor3
-	local hasStroke = manageStroke ~= false and button:FindFirstChildOfClass(S.STROKE)
-	local scale = new(S.SCALE, {}, button)
-	fxBase[button] = baseColor
-
-	button.MouseEnter:Connect(function()
-		if hoverColor then
-			tween(button, 0.18, {BackgroundColor3 = hoverColor})
-		end
-		if hasStroke then
-			tween(hasStroke, 0.18, {Transparency = math.max(0, hasStroke.Transparency - 0.15)})
-		end
-	end)
-	button.MouseLeave:Connect(function()
-		tween(button, 0.22, {BackgroundColor3 = fxBase[button] or baseColor})
-		if hasStroke then
-			tween(hasStroke, 0.22, {Transparency = math.min(0.7, hasStroke.Transparency + 0.15)})
-		end
-		tween(scale, 0.12, {Scale = 1})
-	end)
-	button.MouseButton1Down:Connect(function()
-		tween(scale, 0.08, {Scale = 0.97})
-	end)
-	button.MouseButton1Up:Connect(function()
-		tween(scale, 0.18, {Scale = 1}, Ease.Back)
-	end)
-
-	return scale
-end
-
--- sürükleme takibi (global dinleyici yalnızca sürükleme sırasında açık)
-local function trackDrag(handle, onBegin, onMove, onEnd)
-	handle.InputBegan:Connect(function(input)
-		if not isPointer(input) then
-			return
-		end
-
-		local moveConn, endConn
-		local function stop()
-			if moveConn then
-				moveConn:Disconnect()
-				moveConn = nil
-			end
-			if endConn then
-				endConn:Disconnect()
-				endConn = nil
-			end
-			if onEnd then
-				onEnd()
-			end
-		end
-
-		if onBegin(input) == false then
-			return
-		end
-		moveConn = UIS.InputChanged:Connect(function(changed)
-			if changed.UserInputType == UserInputType.MouseMovement or changed == input then
-				onMove(changed)
-			end
-		end)
-		endConn = UIS.InputEnded:Connect(function(changed)
-			if changed == input or changed.UserInputState == UserInputState.End then
-				stop()
-			end
-		end)
-	end)
-end
-
-local __ok, __err = xpcall(function()
-
---------------------------------------------------------------------
--- 5) Arayüz kurulumu
---------------------------------------------------------------------
-local Previous = PlayerGui[S.FINDIRSTCHILD](PlayerGui, S.GUINAME)
-if Previous then
-	Previous:Destroy()
-end
-
-local Gui = new(S.GUI_CLS, {
-	Name = S.GUINAME,
-	ResetOnSpawn = false,
-	DisplayOrder = 50,
-	ZIndexBehavior = Enum[S.ENUM_ZIDX].Sibling,
-}, PlayerGui)
-
-local FULL_SIZE = UDim2.fromOffset(352, 476)
-local MINI_SIZE = UDim2.fromOffset(352, 60)
-
-local Main = new(S.FRAME, {
-	Name = "Main",
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	Position = UDim2.new(0.5, 0, 0.5, 12),
-	Size = FULL_SIZE,
-	BackgroundColor3 = COLORS.bgTop,
-	BorderSizePixel = 0,
-	ClipsDescendants = true,
-	ZIndex = 1,
-}, Gui)
-corner(Main, 18)
-
-local BgGradient = new(S.GRADIENT, {
-	Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, COLORS.bgTop),
-		ColorSequenceKeypoint.new(1, COLORS.bgBottom),
-	}),
-	Rotation = 90,
-}, Main)
-
-local Outline = stroke(Main, Color3.new(1, 1, 1), 1.6, 0.55)
-local OutlineGradient = new(S.GRADIENT, {
-	Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, COLORS.accent),
-		ColorSequenceKeypoint.new(0.5, COLORS.accent2),
-		ColorSequenceKeypoint.new(1, COLORS.accent),
-	}),
-}, Outline)
-TweenService:Create(OutlineGradient, TweenInfo.new(7, Ease.Linear, EaseDir.In, -1), {Rotation = 360}):Play()
-
-local MainScale = new(S.SCALE, {Scale = 0.86}, Main)
-
--- üst bar
-local TopBar = new(S.FRAME, {
-	Name = "TopBar",
-	Size = UDim2.new(1, 0, 0, 60),
-	BackgroundTransparency = 1,
-	Active = true,
-	ZIndex = 2,
-}, Main)
-
-local Logo = new(S.FRAME, {
-	Position = UDim2.fromOffset(14, 12),
-	Size = UDim2.fromOffset(36, 36),
-	BackgroundColor3 = COLORS.accent,
-	BorderSizePixel = 0,
-	ZIndex = 3,
-}, TopBar)
-corner(Logo, 11)
-local LogoGradient = new(S.GRADIENT, {
-	Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, COLORS.accent),
-		ColorSequenceKeypoint.new(1, COLORS.accent2),
-	}),
-	Rotation = 45,
-}, Logo)
-TweenService:Create(LogoGradient, TweenInfo.new(9, Ease.Linear, EaseDir.In, -1), {Rotation = 405}):Play()
-
-local LogoText = new(S.LABEL, {
-	Size = UDim2.fromScale(1, 1),
-	BackgroundTransparency = 1,
-	Font = Enum.Font.GothamBlack,
-	Text = "CS",
-	TextSize = 15,
-	TextColor3 = Color3.new(1, 1, 1),
-	ZIndex = 4,
-}, Logo)
-
-local Title = new(S.LABEL, {
-	Position = UDim2.fromOffset(60, 9),
-	Size = UDim2.new(1, -130, 0, 26),
-	BackgroundTransparency = 1,
-	Font = Enum.Font.GothamBlack,
-	TextSize = 20,
-	TextColor3 = COLORS.accent,
-	TextXAlignment = Enum.TextXAlignment.Left,
-	ZIndex = 3,
-}, TopBar)
-local TitleGradient = new(S.GRADIENT, {
-	Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, COLORS.accent),
-		ColorSequenceKeypoint.new(0.5, Color3.new(1, 1, 1)),
-		ColorSequenceKeypoint.new(1, COLORS.accent2),
-	}),
-}, Title)
-TweenService:Create(TitleGradient, TweenInfo.new(7, Ease.Linear, EaseDir.In, -1), {Rotation = 360}):Play()
-
-local Subtitle = new(S.LABEL, {
-	Position = UDim2.fromOffset(60, 34),
-	Size = UDim2.new(1, -130, 0, 14),
-	BackgroundTransparency = 1,
-	Font = Enum.Font.Gotham,
-	TextSize = 10,
-	TextColor3 = COLORS.muted,
-	TextXAlignment = Enum.TextXAlignment.Left,
-	ZIndex = 3,
-}, TopBar)
-
-local Minimize = new(S.BUTTON, {
-	AnchorPoint = Vector2.new(1, 0.5),
-	Position = UDim2.new(1, -52, 0.5, 0),
-	Size = UDim2.fromOffset(28, 26),
-	BackgroundColor3 = COLORS.button,
-	AutoButtonColor = false,
-	Font = Enum.Font.GothamBold,
-	Text = "—",
-	TextSize = 16,
-	TextColor3 = COLORS.text,
-	ZIndex = 3,
-}, TopBar)
-corner(Minimize, 8)
-fx(Minimize, 8, COLORS.buttonHover)
-
-local Close = new(S.BUTTON, {
-	AnchorPoint = Vector2.new(1, 0.5),
-	Position = UDim2.new(1, -14, 0.5, 0),
-	Size = UDim2.fromOffset(28, 26),
-	BackgroundColor3 = COLORS.button,
-	AutoButtonColor = false,
-	Font = Enum.Font.GothamBold,
-	Text = "✕",
-	TextSize = 13,
-	TextColor3 = COLORS.text,
-	ZIndex = 3,
-}, TopBar)
-corner(Close, 8)
-fx(Close, 8, COLORS.red)
-
-new(S.FRAME, {
-	Position = UDim2.new(0, 16, 1, -1),
-	Size = UDim2.new(1, -32, 0, 1),
-	BackgroundColor3 = COLORS.panel,
-	BackgroundTransparency = 0.15,
-	BorderSizePixel = 0,
-	ZIndex = 3,
-}, TopBar)
-
-local Content = new(S.GROUP, {
-	Name = "Content",
-	Position = UDim2.fromOffset(0, 60),
-	Size = UDim2.new(1, 0, 0, 404),
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	ZIndex = 2,
-}, Main)
-
--- giriş animasyonu kayıtları
-local Entrance = {}
-local function register(obj, kind, slide)
-	local target = 0
-	if kind == "text" then
-		target = obj.TextTransparency
-		obj.TextTransparency = 1
-	elseif kind == "stroke" then
-		target = obj.Transparency
-		obj.Transparency = 1
-	else
-		target = obj.BackgroundTransparency
-		obj.BackgroundTransparency = 1
-	end
-	-- Konum yalnızca kaydırılacak GuiObject'lerde okunur (UIStroke vb. 'de Position' yok)
-	local pos = nil
-	if slide then
-		pos = obj.Position
-	end
-	Entrance[#Entrance + 1] = {obj = obj, kind = kind, target = target, pos = pos, slide = slide}
-end
-
--- açık/kapalı anahtar satırı
-local function createToggle(y, icon)
-	local row = new(S.BUTTON, {
-		Position = UDim2.fromOffset(14, y),
-		Size = UDim2.new(1, -28, 0, 54),
-		BackgroundColor3 = COLORS.button,
-		AutoButtonColor = false,
-		Text = "",
-		ClipsDescendants = true,
-		ZIndex = 2,
-	}, Content)
-	corner(row, 13)
-	local rowStroke = stroke(row, COLORS.panel, 1, 0.4)
-
-	local chip = new(S.FRAME, {
-		Position = UDim2.fromOffset(10, 9),
-		Size = UDim2.fromOffset(36, 36),
-		BackgroundColor3 = COLORS.accent,
-		BorderSizePixel = 0,
-		ZIndex = 3,
-	}, row)
-	corner(chip, 11)
-
-	local chipText = new(S.LABEL, {
-		Size = UDim2.fromScale(1, 1),
-		BackgroundTransparency = 1,
-		Font = Enum.Font.GothamBold,
-		Text = icon,
-		TextSize = 16,
-		TextColor3 = Color3.new(1, 1, 1),
-		ZIndex = 4,
-	}, chip)
-
-	local label = new(S.LABEL, {
-		Position = UDim2.fromOffset(56, 0),
-		Size = UDim2.new(1, -190, 1, 0),
-		BackgroundTransparency = 1,
-		Font = Enum.Font.GothamSemibold,
-		TextSize = 14,
-		TextColor3 = COLORS.text,
-		TextXAlignment = Enum.TextXAlignment.Left,
-		TextYAlignment = Enum.TextYAlignment.Center,
-		ZIndex = 3,
-	}, row)
-
-	local stateText = new(S.LABEL, {
-		AnchorPoint = Vector2.new(1, 0.5),
-		Position = UDim2.new(1, -62, 0.5, 0),
-		Size = UDim2.fromOffset(52, 16),
-		BackgroundTransparency = 1,
-		Font = Enum.Font.GothamBold,
-		TextSize = 11,
-		TextColor3 = COLORS.muted,
-		TextXAlignment = Enum.TextXAlignment.Right,
-		ZIndex = 3,
-	}, row)
-
-	local track = new(S.FRAME, {
-		AnchorPoint = Vector2.new(1, 0.5),
-		Position = UDim2.new(1, -14, 0.5, 0),
-		Size = UDim2.fromOffset(40, 22),
-		BackgroundColor3 = COLORS.panel,
-		BorderSizePixel = 0,
-		ZIndex = 3,
-	}, row)
-	corner(track, 11)
-
-	local halo = new(S.FRAME, {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.fromScale(0, 0.5),
-		Size = UDim2.fromOffset(26, 26),
-		BackgroundColor3 = COLORS.green,
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		ZIndex = 3,
-	}, track)
-	corner(halo, 13)
-
-	local knob = new(S.FRAME, {
-		AnchorPoint = Vector2.new(0, 0.5),
-		Position = UDim2.new(0, 3, 0.5, 0),
-		Size = UDim2.fromOffset(16, 16),
-		BackgroundColor3 = COLORS.text,
-		BorderSizePixel = 0,
-		ZIndex = 4,
-	}, track)
-	corner(knob, 8)
-
-	fx(row, 13, COLORS.buttonHover, false)
-
-	register(row, "bg", true)
-	register(rowStroke, "stroke")
-	register(chip, "bg")
-	register(chipText, "text")
-	register(label, "text")
-	register(stateText, "text")
-	register(track, "bg")
-	register(knob, "bg")
-
-	return {
-		Row = row,
-		Stroke = rowStroke,
-		Chip = chip,
-		Label = label,
-		State = stateText,
-		Track = track,
-		Knob = knob,
-		Halo = halo,
-	}
-end
-
-local FlyToggle = createToggle(14, "↑")
-local ClipToggle = createToggle(76, "◆")
-
--- hız kartı
-local SpeedCard = new(S.FRAME, {
-	Position = UDim2.fromOffset(14, 140),
-	Size = UDim2.new(1, -28, 0, 88),
-	BackgroundColor3 = COLORS.button,
-	BorderSizePixel = 0,
-	ZIndex = 2,
-}, Content)
-corner(SpeedCard, 13)
-stroke(SpeedCard, COLORS.panel, 1, 0.4)
-
-local SpeedChip = new(S.FRAME, {
-	Position = UDim2.fromOffset(10, 12),
-	Size = UDim2.fromOffset(36, 36),
-	BackgroundColor3 = COLORS.accent2,
-	BorderSizePixel = 0,
-	ZIndex = 3,
-}, SpeedCard)
-corner(SpeedChip, 11)
-local SpeedChipText = new(S.LABEL, {
-	Size = UDim2.fromScale(1, 1),
-	BackgroundTransparency = 1,
-	Font = Enum.Font.GothamBold,
-	Text = "»",
-	TextSize = 16,
-	TextColor3 = Color3.new(1, 1, 1),
-	ZIndex = 4,
-}, SpeedChip)
-
-local SpeedLabel = new(S.LABEL, {
-	Position = UDim2.fromOffset(56, 13),
-	Size = UDim2.new(1, -110, 0, 22),
-	BackgroundTransparency = 1,
-	Font = Enum.Font.GothamSemibold,
-	TextSize = 13,
-	TextColor3 = COLORS.text,
-	TextXAlignment = Enum.TextXAlignment.Left,
-	ZIndex = 3,
-}, SpeedCard)
-
-local SpeedValue = new(S.LABEL, {
-	AnchorPoint = Vector2.new(1, 0),
-	Position = UDim2.new(1, -14, 0, 12),
-	Size = UDim2.fromOffset(70, 22),
-	BackgroundTransparency = 1,
-	Font = Enum.Font.GothamBlack,
-	TextSize = 16,
-	TextColor3 = COLORS.accent,
-	TextXAlignment = Enum.TextXAlignment.Right,
-	ZIndex = 3,
-}, SpeedCard)
-
-local Bar = new(S.FRAME, {
-	Position = UDim2.fromOffset(14, 58),
-	Size = UDim2.new(1, -28, 0, 8),
-	BackgroundColor3 = COLORS.panel,
-	BorderSizePixel = 0,
-	ZIndex = 3,
-}, SpeedCard)
-corner(Bar, 4)
-
-local Fill = new(S.FRAME, {
-	Size = UDim2.fromScale(0, 1),
-	BackgroundColor3 = COLORS.accent,
-	BorderSizePixel = 0,
-	ZIndex = 4,
-}, Bar)
-corner(Fill, 4)
-local FillGradient = new(S.GRADIENT, {
-	Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, COLORS.accent),
-		ColorSequenceKeypoint.new(1, COLORS.accent2),
-	}),
-}, Fill)
-TweenService:Create(FillGradient, TweenInfo.new(3.2, Ease.Linear, EaseDir.In, -1), {Rotation = 360}):Play()
-
-local SliderKnob = new(S.FRAME, {
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	Position = UDim2.fromScale(0, 0.5),
-	Size = UDim2.fromOffset(18, 18),
-	BackgroundColor3 = COLORS.text,
-	BorderSizePixel = 0,
-	ZIndex = 5,
-}, Bar)
-corner(SliderKnob, 9)
-stroke(SliderKnob, COLORS.accent, 2, 0)
-
-local SliderHit = new(S.BUTTON, {
-	Position = UDim2.fromOffset(10, 44),
-	Size = UDim2.new(1, -20, 0, 32),
-	BackgroundTransparency = 1,
-	Text = "",
-	ZIndex = 6,
-}, SpeedCard)
-
-register(SpeedCard, "bg", true)
-register(SpeedChip, "bg")
-register(SpeedChipText, "text")
-register(SpeedLabel, "text")
-register(SpeedValue, "text")
-register(Bar, "bg")
-register(Fill, "bg")
-register(SliderKnob, "bg")
-
-local function setSpeed(value)
-	value = math.clamp(math.floor(value / CONFIG.Step + 0.5) * CONFIG.Step, CONFIG.MinSpeed, CONFIG.MaxSpeed)
-	CONFIG.Speed = value
-	local ratio = (value - CONFIG.MinSpeed) / (CONFIG.MaxSpeed - CONFIG.MinSpeed)
-	Fill.Size = UDim2.fromScale(ratio, 1)
-	SliderKnob.Position = UDim2.fromScale(ratio, 0.5)
-	SpeedValue.Text = tostring(value)
-end
-
-local function sliderFromX(x)
-	local ratio = math.clamp((x - Bar.AbsolutePosition.X) / math.max(Bar.AbsoluteSize.X, 1), 0, 1)
-	setSpeed(CONFIG.MinSpeed + ratio * (CONFIG.MaxSpeed - CONFIG.MinSpeed))
-end
-
-trackDrag(SliderHit, function(input)
-	sliderFromX(input.Position.X)
-	tween(SliderKnob, 0.1, {Size = UDim2.fromOffset(22, 22)})
-end, function(changed)
-	sliderFromX(changed.Position.X)
-end, function()
-	tween(SliderKnob, 0.18, {Size = UDim2.fromOffset(18, 18)}, Ease.Back)
+flyBtn.MouseButton1Click:Connect(function()
+    if flying then stopFly() else startFly() end
+    refreshTexts()
 end)
 
--- dil seçimi
-local LanguageLabel = new(S.LABEL, {
-	Position = UDim2.fromOffset(16, 240),
-	Size = UDim2.new(1, -32, 0, 16),
-	BackgroundTransparency = 1,
-	Font = Enum.Font.GothamSemibold,
-	TextSize = 11,
-	TextColor3 = COLORS.muted,
-	TextXAlignment = Enum.TextXAlignment.Left,
-	ZIndex = 3,
-}, Content)
-
-local LanguageRow = new(S.FRAME, {
-	Position = UDim2.fromOffset(14, 262),
-	Size = UDim2.new(1, -28, 0, 34),
-	BackgroundTransparency = 1,
-	ZIndex = 2,
-}, Content)
-new(S.LAYOUT, {
-	FillDirection = Enum[S.ENUM_FILLDIR].Horizontal,
-	SortOrder = Enum[S.ENUM_SORTORDER].LayoutOrder,
-	Padding = UDim.new(0, 6),
-}, LanguageRow)
-
-local LanguageButtons = {}
-for index, code in ipairs(LanguageList) do
-	local button = new(S.BUTTON, {
-		LayoutOrder = index,
-		Size = UDim2.new(0.2, -5, 1, 0),
-		BackgroundColor3 = COLORS.button,
-		AutoButtonColor = false,
-		Font = Enum.Font.GothamBold,
-		Text = code,
-		TextSize = 12,
-		TextColor3 = COLORS.muted,
-		ZIndex = 3,
-	}, LanguageRow)
-	corner(button, 9)
-	local scale = fx(button, 9, COLORS.buttonHover)
-	button.Activated:Connect(function()
-		if State.Language == code then
-			return
-		end
-		State.Language = code
-		if Shared.SetLanguage then
-			Shared.SetLanguage(code)
-		end
-		tween(scale, 0.25, {Scale = 1.12}, Ease.Back)
-		task.delay(0.12, function()
-			tween(scale, 0.2, {Scale = 1})
-		end)
-		if Refresh then
-			Refresh()
-		end
-	end)
-	LanguageButtons[code] = button
-	register(button, "bg")
-end
-
-register(LanguageLabel, "text")
-register(LanguageRow, "bg", true)
-
--- Discord düğmesi
-local DiscordButton = new(S.BUTTON, {
-	Position = UDim2.fromOffset(14, 306),
-	Size = UDim2.new(1, -28, 0, 48),
-	BackgroundColor3 = COLORS.discord,
-	AutoButtonColor = false,
-	Text = "",
-	ClipsDescendants = true,
-	ZIndex = 2,
-}, Content)
-corner(DiscordButton, 13)
-
-local Shine = new(S.FRAME, {
-	Position = UDim2.new(-0.5, 0, 0.5, 0),
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	Size = UDim2.fromOffset(64, 120),
-	Rotation = 22,
-	BackgroundColor3 = Color3.new(1, 1, 1),
-	BackgroundTransparency = 0.86,
-	BorderSizePixel = 0,
-	ZIndex = 3,
-}, DiscordButton)
-
-local DiscordIcon = new(S.LABEL, {
-	Position = UDim2.fromOffset(16, 0),
-	Size = UDim2.fromOffset(20, 48),
-	BackgroundTransparency = 1,
-	Font = Enum.Font.GothamBold,
-	Text = "●",
-	TextSize = 14,
-	TextColor3 = Color3.new(1, 1, 1),
-	ZIndex = 5,
-}, DiscordButton)
-
-local DiscordText = new(S.LABEL, {
-	Position = UDim2.fromOffset(44, 0),
-	Size = UDim2.new(1, -110, 0, 48),
-	BackgroundTransparency = 1,
-	Font = Enum.Font.GothamBold,
-	TextSize = 14,
-	TextColor3 = Color3.new(1, 1, 1),
-	TextXAlignment = Enum.TextXAlignment.Left,
-	TextYAlignment = Enum.TextYAlignment.Center,
-	ZIndex = 5,
-}, DiscordButton)
-
-local DiscordHint = new(S.LABEL, {
-	AnchorPoint = Vector2.new(1, 0.5),
-	Position = UDim2.new(1, -14, 0.5, 0),
-	Size = UDim2.fromOffset(70, 20),
-	BackgroundTransparency = 1,
-	Font = Enum.Font.GothamBold,
-	TextSize = 10,
-	TextColor3 = Color3.fromRGB(214, 220, 255),
-	TextXAlignment = Enum.TextXAlignment.Right,
-	ZIndex = 5,
-}, DiscordButton)
-
-fx(DiscordButton, 13, COLORS.discordHover)
-
-DiscordButton.MouseEnter:Connect(function()
-	Shine.Position = UDim2.new(-0.5, 0, 0.5, 0)
-	Shine.BackgroundTransparency = 0.86
-	tween(Shine, 0.65, {Position = UDim2.new(1.5, 0, 0.5, 0), BackgroundTransparency = 0.95}, Ease.Sine)
+noclipBtn.MouseButton1Click:Connect(function()
+    if noclipping then stopNoclip() else startNoclip() end
+    refreshTexts()
 end)
 
-DiscordButton.MouseLeave:Connect(function()
-	Shine.Position = UDim2.new(-0.5, 0, 0.5, 0)
-	Shine.BackgroundTransparency = 0.86
+langBtn.MouseButton1Click:Connect(function()
+    getgenv().CR_LANG = (getgenv().CR_LANG == "TR") and "EN" or "TR"
+    status.Text = ""
+    refreshTexts()
 end)
 
-register(DiscordButton, "bg", true)
-register(DiscordIcon, "text")
-register(DiscordText, "text")
-register(DiscordHint, "text")
-
--- kopyalama yedeği (metin kutusu)
-local DiscordBox = new(S.TEXTBOX, {
-	Position = UDim2.fromOffset(14, 306),
-	Size = UDim2.new(1, -28, 0, 48),
-	BackgroundColor3 = COLORS.panel,
-	BackgroundTransparency = 0,
-	Font = Enum.Font.GothamBold,
-	Text = "",
-	TextSize = 13,
-	TextColor3 = COLORS.text,
-	TextEditable = false,
-	Selectable = false,
-	ClearTextOnFocus = false,
-	Visible = false,
-	ZIndex = 8,
-}, Content)
-corner(DiscordBox, 13)
-stroke(DiscordBox, COLORS.discord, 2, 0.2)
-
-local Info = new(S.LABEL, {
-	Position = UDim2.fromOffset(16, 362),
-	Size = UDim2.new(1, -32, 0, 30),
-	BackgroundTransparency = 1,
-	Font = Enum.Font.Gotham,
-	TextSize = 10,
-	TextColor3 = COLORS.muted,
-	TextWrapped = true,
-	TextXAlignment = Enum.TextXAlignment.Left,
-	TextYAlignment = Enum.TextYAlignment.Top,
-	ZIndex = 3,
-}, Content)
-register(Info, "text")
-
--- bildirim (toast)
-local ToastFrame = new(S.FRAME, {
-	AnchorPoint = Vector2.new(0.5, 0),
-	Position = UDim2.new(0.5, 0, 0, -48),
-	Size = UDim2.new(1, -40, 0, 38),
-	BackgroundColor3 = COLORS.green,
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	ZIndex = 20,
-}, Gui)
-corner(ToastFrame, 12)
-
-local ToastText = new(S.LABEL, {
-	Size = UDim2.fromScale(1, 1),
-	BackgroundTransparency = 1,
-	Font = Enum.Font.GothamBold,
-	TextSize = 13,
-	TextColor3 = COLORS.text,
-	TextTransparency = 1,
-	ZIndex = 21,
-}, ToastFrame)
-
-local toastToken = 0
-local function toast(message, color)
-	toastToken = toastToken + 1
-	local token = toastToken
-	ToastText.Text = message
-	ToastFrame.BackgroundColor3 = color or COLORS.green
-	tween(ToastFrame, 0.25, {BackgroundTransparency = 0, Position = UDim2.new(0.5, 0, 0, 8)}, Ease.Back)
-	tween(ToastText, 0.25, {TextTransparency = 0})
-	task.delay(1.9, function()
-		if token ~= toastToken then
-			return
-		end
-		tween(ToastFrame, 0.3, {BackgroundTransparency = 1, Position = UDim2.new(0.5, 0, 0, -48)}, Ease.Quint)
-		tween(ToastText, 0.3, {TextTransparency = 1})
-	end)
-end
-
--- paneli açan yüzen düğme
-local Launcher = new(S.BUTTON, {
-	AnchorPoint = Vector2.new(1, 0),
-	Position = UDim2.new(1, -16, 0, 16),
-	Size = UDim2.fromOffset(46, 46),
-	BackgroundColor3 = COLORS.accent,
-	AutoButtonColor = false,
-	Font = Enum.Font.GothamBlack,
-	Text = "CS",
-	TextSize = 16,
-	TextColor3 = Color3.new(1, 1, 1),
-	Visible = false,
-	ZIndex = 30,
-}, Gui)
-corner(Launcher, 15)
-local LauncherGradient = new(S.GRADIENT, {
-	Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, COLORS.accent),
-		ColorSequenceKeypoint.new(1, COLORS.accent2),
-	}),
-	Rotation = 45,
-}, Launcher)
-local LauncherScale = new(S.SCALE, {}, Launcher)
-fx(Launcher, 15)
-TweenService:Create(LauncherGradient, TweenInfo.new(9, Ease.Linear, EaseDir.In, -1), {Rotation = 405}):Play()
-
---------------------------------------------------------------------
--- 6) Dil bilgisi / yardımcılar
---------------------------------------------------------------------
-local function infoText()
-	return MOBILE and tr("infoTouch") or tr("info")
-end
-
-local flashId = 0
-local function flashDiscord(text, color)
-	flashId = flashId + 1
-	local id = flashId
-	DiscordText.Text = text
-	DiscordHint.Text = ""
-	fxBase[DiscordButton] = color or COLORS.green
-	tween(DiscordButton, 0.18, {BackgroundColor3 = color or COLORS.green})
-	task.delay(1.6, function()
-		if id == flashId then
-			DiscordText.Text = tr("discord")
-			DiscordHint.Text = tr("copy")
-			fxBase[DiscordButton] = COLORS.discord
-			tween(DiscordButton, 0.3, {BackgroundColor3 = COLORS.discord})
-		end
-	end)
-end
-
-local function hideBox()
-	DiscordBox.Visible = false
-	DiscordBox.TextEditable = false
-	DiscordBox.Selectable = false
-	DiscordBox.Text = ""
-	DiscordButton.Visible = true
-	Info.Text = infoText()
-end
-
--- Roblox'ta pano yazma API'si yok; global fonksiyon varsa (exploit/command bar) onu dener
-local function globalFn(name)
-	local env = (type(getfenv) == "function") and getfenv(0) or _G
-	if type(env) == "table" then
-		local fn = rawget(env, name)
-		if type(fn) == "function" then
-			return fn
-		end
-	end
-	return nil
-end
-
--- kopyalama: önce native/global yol, yoksa odaklı metin kutusu
-local function copyInvite()
-	local text = S.INVITE
-
-	local setter = globalFn(S.SETCLIPBOARD) or globalFn(S.TOCLIPBOARD)
-	if setter then
-		local ok = pcall(setter, text)
-		if ok then
-			return true
-		end
-	end
-
-	-- Roblox'ta yazma API'si yok: metni seçili metin kutusunda göster
-	DiscordBox.Text = text
-	DiscordBox.Visible = true
-	DiscordBox.TextEditable = true
-	DiscordBox.Selectable = true
-	DiscordButton.Visible = false
-	Info.Text = tr("manual")
-	pcall(function()
-		DiscordBox:CaptureFocus()
-		DiscordBox.CursorPosition = #text
-		DiscordBox.SelectionStart = 1
-	end)
-	return false
-end
-
-DiscordButton.Activated:Connect(function()
-	local native = copyInvite()
-	if native then
-		flashDiscord(tr("copied"), COLORS.green)
-		toast(tr("copied"), COLORS.green)
-	else
-		toast(tr("manual"), COLORS.discord)
-	end
+closeBtn.MouseButton1Click:Connect(function()
+    stopFly()
+    stopNoclip()
+    gui:Destroy()
 end)
 
-DiscordBox.FocusLost:Connect(function()
-	task.delay(0.15, function()
-		if DiscordBox.Visible and not DiscordBox:IsFocused() then
-			hideBox()
-		end
-	end)
+LocalPlayer.CharacterAdded:Connect(function()
+    stopFly()
+    refreshTexts()
 end)
 
--- kutuya tekrar odaklanınca (TextBox olayı: Focused) davet metnini ve seçimi tazele
-DiscordBox.Focused:Connect(function()
-	if DiscordBox.Text ~= S.INVITE then
-		DiscordBox.Text = S.INVITE
-	end
-	pcall(function()
-		DiscordBox.CursorPosition = #S.INVITE
-		DiscordBox.SelectionStart = 1
-	end)
-end)
-
--- Ctrl+C algılama (odaklı metin kutusunda kopyalama)
-UIS.InputBegan:Connect(function(input, processed)
-	if input.KeyCode == KeyCode.C then
-		local ctrl = UIS:IsKeyDown(KeyCode.LeftControl) or UIS:IsKeyDown(KeyCode.RightControl)
-		if ctrl and DiscordBox.Visible and DiscordBox:IsFocused() then
-			flashDiscord(tr("copied"), COLORS.green)
-			toast(tr("copied"), COLORS.green)
-		end
-	end
-end)
-
---------------------------------------------------------------------
--- 7) Mobil kontrol paneli
---------------------------------------------------------------------
-local TouchPad, PadScale
-local PadButtons = {}
-local padShown = false
-
-if MOBILE then
-	TouchPad = new(S.FRAME, {
-		AnchorPoint = Vector2.new(1, 1),
-		Position = UDim2.new(1, -18, 1, -170),
-		Size = UDim2.fromOffset(58, 116),
-		BackgroundTransparency = 1,
-		Visible = false,
-		ZIndex = 25,
-	}, Gui)
-	PadScale = new(S.SCALE, {}, TouchPad)
-
-	local function padButton(symbol, y, key)
-		local button = new(S.BUTTON, {
-			Position = UDim2.fromOffset(0, y),
-			Size = UDim2.fromOffset(58, 52),
-			BackgroundColor3 = COLORS.button,
-			AutoButtonColor = false,
-			Font = Enum.Font.GothamBold,
-			Text = symbol,
-			TextSize = 20,
-			TextColor3 = COLORS.text,
-			ZIndex = 26,
-		}, TouchPad)
-		corner(button, 14)
-		stroke(button, COLORS.accent, 1.5, 0.3)
-		button.InputBegan:Connect(function(input)
-			if isPointer(input) then
-				Hold[key] = input
-				tween(button, 0.1, {BackgroundColor3 = COLORS.accent})
-			end
-		end)
-		PadButtons[key] = button
-	end
-
-	padButton("▲", 0, "Up")
-	padButton("▼", 64, "Down")
-end
-
-UIS.InputEnded:Connect(function(input)
-	for key, held in pairs(Hold) do
-		if held == input then
-			Hold[key] = nil
-			if PadButtons[key] then
-				tween(PadButtons[key], 0.14, {BackgroundColor3 = COLORS.button})
-			end
-		end
-	end
-end)
-
---------------------------------------------------------------------
--- 8) Yenileme (dil / durum güncellemesi)
---------------------------------------------------------------------
-local function setToggle(toggle, on)
-	toggle.State.Text = on and tr("on") or tr("off")
-	tween(toggle.State, 0.2, {TextColor3 = on and COLORS.green or COLORS.muted})
-	tween(toggle.Track, 0.2, {BackgroundColor3 = on and COLORS.green or COLORS.panel})
-	-- NOT: çerçevenin saydamlığı giriş animasyonuna bırakılır (aksi halde
-	-- giriş sırasında satırın üstinde boş bir çerçeve asılı kalır)
-	tween(toggle.Stroke, 0.2, {Color = on and COLORS.green or COLORS.panel})
-	tween(toggle.Chip, 0.2, {BackgroundColor3 = on and COLORS.green or COLORS.accent})
-	tween(toggle.Knob, 0.28, {
-		Position = on and UDim2.new(0, 21, 0.5, 0) or UDim2.new(0, 3, 0.5, 0),
-	}, Ease.Back)
-	tween(toggle.Halo, 0.25, {
-		Position = on and UDim2.new(1, 0, 0.5, 0) or UDim2.new(0, 0, 0.5, 0),
-		BackgroundTransparency = on and 0.65 or 1,
-	})
-end
-
-Refresh = function()
-	Title.Text = tr("title")
-	Subtitle.Text = tr("subtitle")
-	FlyToggle.Label.Text = tr("fly")
-	ClipToggle.Label.Text = tr("clip")
-	SpeedLabel.Text = tr("speed")
-	LanguageLabel.Text = tr("language")
-	DiscordText.Text = tr("discord")
-	DiscordHint.Text = tr("copy")
-	Info.Text = infoText()
-
-	setToggle(FlyToggle, State.Fly)
-	setToggle(ClipToggle, State.NoClip)
-
-	for code, button in pairs(LanguageButtons) do
-		local active = code == State.Language
-		fxBase[button] = active and COLORS.accent or COLORS.button
-		tween(button, 0.22, {
-			BackgroundColor3 = active and COLORS.accent or COLORS.button,
-			TextColor3 = active and COLORS.text or COLORS.muted,
-		})
-	end
-
-	if TouchPad and padShown ~= State.Fly then
-		padShown = State.Fly
-		if padShown then
-			for _, button in pairs(PadButtons) do
-				button.BackgroundColor3 = COLORS.button
-			end
-			TouchPad.Visible = true
-			PadScale.Scale = 0.6
-			tween(PadScale, 0.3, {Scale = 1}, Ease.Back)
-		else
-			TouchPad.Visible = false
-		end
-	end
-end
-
-FlyToggle.Row.Activated:Connect(function()
-	if State.Fly then
-		stopFly()
-	else
-		if not Root or not Humanoid or Humanoid.Health <= 0 then
-			toast(tr("waitChar"), COLORS.red)
-			return
-		end
-		if not startFly() then
-			toast(tr("waitChar"), COLORS.red)
-			return
-		end
-		toast(tr("fly") .. " · " .. tr("on"), COLORS.green)
-	end
-	Refresh()
-end)
-
-ClipToggle.Row.Activated:Connect(function()
-	if State.NoClip then
-		stopClip()
-		toast(tr("clip") .. " · " .. tr("off"), COLORS.muted)
-	else
-		if not startClip() then
-			toast(tr("waitChar"), COLORS.red)
-			return
-		end
-		toast(tr("clip") .. " · " .. tr("on"), COLORS.green)
-	end
-	Refresh()
-end)
-
---------------------------------------------------------------------
--- 9) Pencere kontrolleri (küçült / kapat / sürükle)
---------------------------------------------------------------------
-Minimize.Activated:Connect(function()
-	State.Minimized = not State.Minimized
-	local mini = State.Minimized
-
-	Minimize.Text = mini and "+" or "—"
-	if not mini then
-		Content.Visible = true
-	end
-	tween(Content, 0.26, {GroupTransparency = mini and 1 or 0})
-	tween(Subtitle, 0.22, {TextTransparency = mini and 1 or 0})
-	tween(Main, 0.32, {Size = mini and MINI_SIZE or FULL_SIZE}, Ease.Quint)
-
-	task.delay(0.26, function()
-		if State.Minimized == mini then
-			Content.Visible = not mini
-		end
-	end)
-end)
-
-local function setPanelHidden(hidden)
-	State.Hidden = hidden
-	if hidden then
-		tween(Main, 0.28, {Size = UDim2.fromOffset(352, 60)}, Ease.Quint)
-		task.delay(0.28, function()
-			if State.Hidden then
-				Main.Visible = false
-			end
-		end)
-		Launcher.Visible = true
-		tween(LauncherScale, 0.3, {Scale = 1}, Ease.Back)
-	else
-		Launcher.Visible = false
-		Main.Visible = true
-		tween(Main, 0.32, {Size = State.Minimized and MINI_SIZE or FULL_SIZE}, Ease.Back)
-	end
-end
-
-Close.Activated:Connect(function()
-	setPanelHidden(true)
-end)
-
-Launcher.Activated:Connect(function()
-	setPanelHidden(false)
-end)
-
--- sürükleme (ekran içinde kalacak şekilde)
-local dragStart, startPosition
-
--- üst bar butonları basılıyken pencere sürüklenmesin
-local uiPressed = false
-local function markPressed(object)
-	object.InputBegan:Connect(function()
-		uiPressed = true
-	end)
-	object.InputEnded:Connect(function()
-		uiPressed = false
-	end)
-end
-markPressed(Minimize)
-markPressed(Close)
-
-local function clampPosition(pos)
-	local camera = workspace.CurrentCamera
-	local viewport = camera and camera.ViewportSize or Vector2.new(1920, 1080)
-	local size = Main.AbsoluteSize
-	local half = size * 0.5
-	local x = math.clamp(pos.X.Offset, half.X - viewport.X * pos.X.Scale + 8, viewport.X * (1 - pos.X.Scale) - half.X - 8)
-	local y = math.clamp(pos.Y.Offset, half.Y - viewport.Y * pos.Y.Scale + 8, viewport.Y * (1 - pos.Y.Scale) - half.Y - 8)
-	return UDim2.new(pos.X.Scale, x, pos.Y.Scale, y)
-end
-
-trackDrag(TopBar, function(input)
-	if uiPressed then
-		return false
-	end
-	dragStart = input.Position
-	startPosition = Main.Position
-end, function(changed)
-	local delta = changed.Position - dragStart
-	Main.Position = clampPosition(UDim2.new(
-		startPosition.X.Scale, startPosition.X.Offset + delta.X,
-		startPosition.Y.Scale, startPosition.Y.Offset + delta.Y
-	))
-end)
-
---------------------------------------------------------------------
--- 10) Karakter olayları
---------------------------------------------------------------------
-local function setupCharacter(char)
-	stopFly()
-	stopClip()
-
-	Character = char
-	Humanoid = char:WaitForChild(S.HUMANOID, 10)
-	Root = char:WaitForChild(S.ROOTPART, 10)
-	if not Humanoid or not Root then
-		return
-	end
-
-	Humanoid[S.DIED]:Connect(function()
-		stopFly()
-		stopClip()
-		if Refresh then
-			Refresh()
-		end
-	end)
-
-	if Refresh then
-		Refresh()
-	end
-end
-
-Player[S.CHARACTERADDED]:Connect(setupCharacter)
-Player[S.CHARACTERREMOVING]:Connect(function()
-	stopFly()
-	stopClip()
-	if Refresh then
-		Refresh()
-	end
-end)
-if Player.Character then
-	task.spawn(setupCharacter, Player.Character)
-end
-
---------------------------------------------------------------------
--- 11) Başlangıç animasyonları
---------------------------------------------------------------------
-setSpeed(CONFIG.Speed)
-Refresh()
-
-task.spawn(function()
-	tween(MainScale, 0.45, {Scale = 1}, Ease.Back)
-	tween(Main, 0.45, {Position = UDim2.new(0.5, 0, 0.5, 0)}, Ease.Quint)
-
-	for index, item in ipairs(Entrance) do
-		task.delay(0.12 + index * 0.035, function()
-			local obj = item.obj
-			if not obj or not obj.Parent then
-				return
-			end
-			if item.kind == "text" then
-				tween(obj, 0.4, {TextTransparency = item.target})
-			elseif item.kind == "stroke" then
-				tween(obj, 0.4, {Transparency = item.target})
-			else
-				tween(obj, 0.4, {BackgroundTransparency = item.target})
-			end
-			if item.slide then
-				local target = item.pos
-				obj.Position = UDim2.new(target.X.Scale, target.X.Offset, target.Y.Scale, target.Y.Offset + 14)
-				tween(obj, 0.45, {Position = target}, Ease.Quint)
-			end
-		end)
-	end
-end)
-
---------------------------------------------------------------------
--- 12) Yükleyici bağlantısı + jeton bekçisi
---------------------------------------------------------------------
-Shared.Register(Gui)
-
--- Anahtar süresi dolunca / kaldırılınca yükleyici çağırır
-Shared.Lock = function()
-	stopFly()
-	stopClip()
-	if Refresh then
-		Refresh()
-	end
-end
-Shared.Unlock = function()
-	if Refresh then
-		Refresh()
-	end
-end
-
--- Hata menüsünden dil değişince arayüz de güncellenir
-Shared.OnLanguage = function(code)
-	if State.Language ~= code then
-		State.Language = code
-		if Refresh then
-			Refresh()
-		end
-	end
-end
-
-Shared.Ready = true -- ana pencere hazır
-
-end, function(e)
-	return debug.traceback(tostring(e), 2)
-end)
-
--- Hata olursa yükleyicinin hata menüsü (E10) açılır
-if not __ok then
-	warn("[CR-SETA] " .. tostring(__err))
-	if Shared.Report then
-		Shared.Report("E10", tostring(__err), 4)
-	end
-end
+refreshTexts()
