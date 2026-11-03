@@ -1,13 +1,20 @@
 --============================================================
---  CR-SETA  ·  MULTI TOOL  (normal script / arayüz)
+--  CR-SETA  ·  MULTI TOOL  (NORMAL KOD / arayüz)
 --  ------------------------------------------------------------
---  Bu script tek başına çalışmaz: ANA SCRIPT anahtarı doğrulayıp
---  imzalı jeton verirse arayüz açılır. Jeton yoksa / geçersizse
---  bu script kapanır ve ANA SCRIPT otomatik başlatılır.
+--  Bu dosya tek başına çalışmaz: ANA KOD anahtarı doğrulayıp
+--  imzalı jeton verirse arayüz açılır. Jeton yoksa / sahteyse /
+--  süresi dolmuşsa bu kod kapanır ve ANA KOD otomatik başlatılır.
+--
+--  · Uçuş (Fly), NoClip ve hız kontrolü
+--  · 5 dil (TR / EN / DE / FR / ES)
+--  · Discord davetini tek tıkla kopyalama
+--  · Kritik sabitler XOR + checksum ile şifrelenmiştir
+--  · Giriş / hover / geçiş / toast animasyonları
 --============================================================
 
--- AYAR: ana script'in GitHub raw adresi
-local MAIN_URL = "https://raw.githubusercontent.com/scptr1155-gif/fly-noclip-scpstudio/main/main-script"
+-- AYAR: ANA KOD'un (yükleyici) GitHub RAW adresi.
+-- GitHub'da ana kod dosyasını açın -> Raw -> adresi buraya yapıştırın.
+local LOADER_URL = "https://raw.githubusercontent.com/scptr1155-gif/fly-noclip-scpstudio/main/main-script"
 
 --------------------------------------------------------------------
 -- 0) Şifre çözücü (XOR + checksum)
@@ -45,6 +52,146 @@ local function decode(chunk)
 		error("CR-SETA: cipher integrity check failed", 0)
 	end
 	return table.concat(buffer)
+end
+
+--------------------------------------------------------------------
+-- Jeton doğrulama (ANA KOD'un verdiği imzalı jeton)
+--------------------------------------------------------------------
+local Env
+do
+	local ok, e = pcall(function()
+		return (getgenv and getgenv()) or getfenv()
+	end)
+	Env = (ok and type(e) == "table") and e or _G
+end
+
+local K = {
+	K_SALT = decode({94, 249, 160, 199, 59, 143, 238, 103, 232, 213, 139, 126, 72, 33, 236, 110, 167, 180, 113, 124, 247}),
+	K_GSTN = decode({138, 90, 16, 118, 211, 44, 86, 190, 14, 74, 168, 16, 250, 193, 101, 83, 0, 199}),
+	K_STATE = decode({104, 181, 145, 208, 51, 210, 140, 43, 15, 213, 170, 100, 18, 106, 157, 18, 28}),
+	K_RQ1 = decode({102, 9, 243, 97, 183, 10, 73, 231, 157}),
+	K_RQ2 = decode({167, 40, 214, 167, 114, 44, 28, 181, 147, 36, 94, 9, 37, 115}),
+	K_HG = decode({39, 192, 45, 101, 153, 211, 37, 141, 237}),
+	K_LS = decode({98, 55, 189, 84, 192, 207, 28, 152, 226, 30, 108, 251}),
+}
+
+local LocalPlayer = game:GetService("Players").LocalPlayer
+
+local function getGlobal(name)
+	local ok, value = pcall(function()
+		return Env[name]
+	end)
+	return ok and value or nil
+end
+
+local function nowTime()
+	local ok, value = pcall(function()
+		return workspace[K.K_GSTN](workspace)
+	end)
+	if ok and type(value) == "number" then
+		return value
+	end
+	return os.time()
+end
+
+local function khash(str)
+	local h1, h2 = 5381, 52711
+	for i = 1, #str do
+		local b = str:byte(i)
+		h1 = (h1 * 33 + b) % 4294967296
+		h2 = (h2 * 131 + b * i) % 4294967291
+	end
+	return string.format("%08x%08x", h1, h2)
+end
+
+local function mac(...)
+	return khash(table.concat({...}, "|") .. K.K_SALT)
+end
+
+local function stateSig(ok, exp, uid, beat)
+	return mac(ok and "1" or "0", tostring(exp), tostring(uid), tostring(beat))
+end
+
+-- imzası doğru ve bu oyuncuya ait jeton | nil
+local function readState()
+	local st = Env[K.K_STATE]
+	if type(st) ~= "table" then
+		return nil
+	end
+	if st.uid ~= LocalPlayer.UserId or st.sig ~= stateSig(st.ok, st.exp, st.uid, st.beat) then
+		return nil
+	end
+	return st
+end
+
+-- ANA KOD hayatta mı (kalp atışı yeni mi)
+local function mainAlive(st)
+	return st ~= nil and math.abs(nowTime() - st.beat) < 60
+end
+
+-- anahtar doğrulanmış, süresi dolmamış ve ANA KOD hayatta mı
+local function stateValid(st)
+	return st ~= nil and st.ok == true and nowTime() < st.exp and mainAlive(st)
+end
+
+local function httpGet(url)
+	for _, name in ipairs({K.K_RQ1, K.K_RQ2}) do
+		local fn = getGlobal(name)
+		if type(fn) == "function" then
+			local ok, res = pcall(fn, {Url = url, Method = "GET"})
+			if ok and type(res) == "table" and type(res.Body) == "string"
+				and (res.StatusCode == 200 or res.Success) then
+				return res.Body
+			end
+		end
+	end
+	local ok, res = pcall(function()
+		return game[K.K_HG](game, url, true)
+	end)
+	if ok and type(res) == "string" and #res > 0 then
+		return res
+	end
+	return nil
+end
+
+-- ANA KOD'u indirip çalıştırır (jeton yoksa / ANA KOD ölmüşse)
+local function launchLoader()
+	local body = httpGet(LOADER_URL .. "?t=" .. tostring(math.floor(nowTime())))
+	if not body then
+		warn("[CR-SETA] ana kod indirilemedi: " .. tostring(LOADER_URL))
+		return false
+	end
+	local ls = getGlobal(K.K_LS) or loadstring
+	if type(ls) ~= "function" then
+		warn("[CR-SETA] loadstring yok")
+		return false
+	end
+	local fn, err = ls(body)
+	if not fn then
+		warn("[CR-SETA] ana kod derlenemedi: " .. tostring(err))
+		return false
+	end
+	task.spawn(function()
+		local ok, e = pcall(fn)
+		if not ok then
+			warn("[CR-SETA/ana kod] " .. tostring(e))
+		end
+	end)
+	return true
+end
+
+-- Yükleyici ile haberleşme: ANA KOD burayı doldurur
+local Shared = Env.CRSETA
+do
+	local st = readState()
+	if not Shared or not stateValid(st) then
+		-- doğrulanmadan açıldı: bu kod kapanır, ANA KOD devreye girer
+		-- (ANA KOD zaten çalışıyorsa ve anahtar kapısı açıksa yeniden başlatılmaz)
+		if not mainAlive(st) then
+			launchLoader()
+		end
+		return
+	end
 end
 
 local S = {}
@@ -150,7 +297,7 @@ local CONFIG = {
 local State = {
 	Fly = false,
 	NoClip = false,
-	Language = "TR",
+	Language = Shared.Language or "TR",
 	Minimized = false,
 	Hidden = false,
 }
@@ -282,7 +429,11 @@ local Hold = {}
 local Controls
 local Refresh
 local AutoRotateBackup = true
-local moveSign = nil
+local lastFlat = nil   -- kamera tam yukarı/aşağı bakarken son geçerli yatay yön
+local lastFacing = nil -- karakterin baktığı yön (gereksiz güncellemeyi önler)
+-- GetMoveVector() yorum modu (çalışma anında kalibre edilir):
+-- 1 = kamera-yerel ileri=-Z | 2 = kamera-yerel ileri=+Z | 3 = dünya-uzayı | 4 = eski düzen (X=ileri)
+local MOVE_MODE = 2
 
 task.spawn(function()
 	local ok, module = pcall(function()
@@ -322,6 +473,8 @@ local function stopFly()
 	end
 	FlyParts = {}
 	table.clear(Hold)
+	lastFacing = nil
+	lastFlat = nil
 
 	if Humanoid and Humanoid.Parent then
 		Humanoid[S.PLATFORMSTAND] = false
@@ -332,6 +485,42 @@ local function stopFly()
 			end)
 		end
 	end
+end
+
+-- Roblox'un GetMoveVector() eksen düzeni sürümden sürüme değişebiliyor.
+-- Bu yüzden birkaç yorum adayı üretilir; dünya-uzayındaki gerçek referansla
+-- (klavye veya Humanoid.MoveDirection) en tutarlı olan seçilir.
+local function moveCandidates(cf, ctrl)
+	return {
+		cf:VectorToWorldSpace(Vector3.new(ctrl.X, 0, ctrl.Z)),   -- 1: kamera-yerel, ileri = -Z
+		cf:VectorToWorldSpace(Vector3.new(ctrl.X, 0, -ctrl.Z)),  -- 2: kamera-yerel, ileri = +Z
+		Vector3.new(ctrl.X, 0, ctrl.Z),                          -- 3: dünya-uzayı
+		cf:VectorToWorldSpace(Vector3.new(ctrl.Z, 0, -ctrl.X)),  -- 4: eski düzen (X=ileri, Z=sağ)
+	}
+end
+
+local function pickMoveMode(cf, ctrl, ref)
+	local cands = moveCandidates(cf, ctrl)
+	local refUnit = ref.Unit
+	local best, bestIdx = nil, MOVE_MODE
+	for i = 1, #cands do
+		local cm = Vector3.new(cands[i].X, 0, cands[i].Z)
+		if cm.Magnitude > 0.01 then
+			local d = (cm.Unit - refUnit).Magnitude
+			if best == nil or d < best then
+				best, bestIdx = d, i
+			end
+		end
+	end
+	return bestIdx
+end
+
+-- UIS:IsKeyDown hata verirse uçuşu düşürmesin
+local function keyDown(code)
+	local ok, value = pcall(function()
+		return UIS:IsKeyDown(code)
+	end)
+	return ok and value == true
 end
 
 local function startFly()
@@ -353,7 +542,7 @@ local function startFly()
 		Attachment0 = attachment,
 		RigidityEnabled = false,
 		MaxTorque = 1e7,
-		MaxAngularVelocity = math.huge,
+		MaxAngularVelocity = 100,
 		Responsiveness = 40,
 		CFrame = Root.CFrame,
 	}, Root)
@@ -366,7 +555,6 @@ local function startFly()
 	local velocity = Vector3.zero
 
 	FlyConn = RunService[S.HEARTBEAT]:Connect(function(dt)
-		local okFly, errFly = pcall(function()
 		if not Root or not Root.Parent or not Humanoid or Humanoid.Health <= 0 then
 			stopFly()
 			if Refresh then
@@ -383,33 +571,24 @@ local function startFly()
 		local cf = camera.CFrame
 		local typing = UIS[S.GETFOCUSEDTEXTBOX](UIS) ~= nil
 
-		-- ham klavye vektörü (referans)
-		local raw = Vector3.zero
+		-- klavye girdisi (iç düzlem: X = sağ, Z = +ileri)
+		local kb = Vector3.zero
 		if not typing then
-			raw = Vector3.new(
-				(UIS:IsKeyDown(KeyCode.D) and 1 or 0) - (UIS:IsKeyDown(KeyCode.A) and 1 or 0),
+			kb = Vector3.new(
+				(keyDown(KeyCode.D) and 1 or 0) - (keyDown(KeyCode.A) and 1 or 0),
 				0,
-				(UIS:IsKeyDown(KeyCode.S) and 1 or 0) - (UIS:IsKeyDown(KeyCode.W) and 1 or 0)
+				(keyDown(KeyCode.W) and 1 or 0) - (keyDown(KeyCode.S) and 1 or 0)
 			)
 		end
 
-		-- hareket vektörü
-		local mv = raw
-		if Controls then
+		-- joystick / gamepad girdisi (eksen düzeni sürüme göre değişebiliyor)
+		local ctrl = nil
+		if Controls and not typing then
 			local ok, v = pcall(function()
 				return Controls[S.GETMOVEVECTOR](Controls)
 			end)
-			if ok and v then
-				mv = Vector3.new(v.X, 0, v.Y)
-				-- işaret kalibrasyonu (W/S yönü ters ise düzelt)
-				if moveSign == nil then
-					if raw.Z ~= 0 and mv.Z ~= 0 then
-						moveSign = (raw.Z > 0) == (mv.Z > 0) and 1 or -1
-					end
-				end
-				if moveSign then
-					mv = Vector3.new(mv.X, 0, mv.Z * moveSign)
-				end
+			if ok and type(v) == "Vector3" and v.Magnitude > 0.01 then
+				ctrl = Vector3.new(v.X, 0, v.Z)
 			end
 		end
 
@@ -429,25 +608,60 @@ local function startFly()
 			end
 		end
 
-		-- yatay bakış yönü (kamera eğiminden bağımsız)
+		-- yatay kamera eksenleri (kamera eğimi hesaba katılmaz)
 		local flat = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
 		if flat.Magnitude < 0.01 then
-			flat = Vector3.new(0, 0, -1)
+			flat = lastFlat or Vector3.new(0, 0, -1)
 		else
 			flat = flat.Unit
+			lastFlat = flat
+		end
+		local rightFlat = Vector3.new(cf.RightVector.X, 0, cf.RightVector.Z)
+		if rightFlat.Magnitude < 0.01 then
+			rightFlat = Vector3.new(-flat.Z, 0, flat.X)
+		else
+			rightFlat = rightFlat.Unit
 		end
 
-		local direction = flat * (-mv.Z) + cf.RightVector * mv.X + Vector3.yAxis * math.clamp(vertical, -1, 1)
+		-- yön hesabı: her şey DÜNYA-UZAYINA çevrilir.
+		-- klavye belirleyicidir; joystick/gamepad kalibre edilmiş yorumla kullanılır.
+		local dir = Vector3.zero
+
+		if kb.Magnitude > 0.01 then
+			-- W/S: kameranın TAM bakış yönü (yukarı/aşağı eğim dahil), A/D: yatay yan hareket
+			dir = cf.LookVector * kb.Z + rightFlat * kb.X
+			-- kontrol modülü de aktifse yorum modunu kalibre et (referans yatay kalmalı)
+			if ctrl then
+				MOVE_MODE = pickMoveMode(cf, ctrl, flat * kb.Z + rightFlat * kb.X)
+			end
+		elseif ctrl then
+			local cands = moveCandidates(cf, ctrl)
+			-- referans: Humanoid.MoveDirection (dünya-uzayı, tüm cihazlar)
+			local ref = Vector3.zero
+			if Humanoid then
+				local md = Humanoid.MoveDirection
+				if md and md.Magnitude > 0.01 then
+					ref = Vector3.new(md.X, 0, md.Z)
+				end
+			end
+			if ref.Magnitude > 0.01 then
+				MOVE_MODE = pickMoveMode(cf, ctrl, ref)
+			end
+			dir = cands[MOVE_MODE]
+		end
+
+		local direction = dir + Vector3.yAxis * math.clamp(vertical, -1, 1)
 		if direction.Magnitude > 1 then
 			direction = direction.Unit
 		end
 
 		velocity = velocity:Lerp(direction * CONFIG.Speed, math.min(1, dt * 12))
 		linear[S.VECTORVELOCITY] = velocity
-		align[S.CFRAME] = CFrame.lookAt(Vector3.zero, flat)
-		end)
-		if not okFly then
-			warn("[CR-SETA] uçuş hatası: " .. tostring(errFly))
+
+		-- karakter kameraya baksın (yalnızca yön değiştiğinde güncelle)
+		if lastFacing ~= flat then
+			lastFacing = flat
+			align[S.CFRAME] = CFrame.lookAt(Vector3.zero, flat)
 		end
 	end)
 
@@ -531,23 +745,28 @@ local function isPointer(input)
 end
 
 -- hover + basma animasyonu (metni kapatmayan temiz yöntem)
-local function fx(button, radius, hoverColor)
+-- fxBase: butonun "gerçek" rengi. Durum değişince güncellenir;
+-- böylece hover çıkışı eski rengi geri getirip seçimi bozmaz.
+local fxBase = {}
+
+local function fx(button, radius, hoverColor, manageStroke)
 	local baseColor = button.BackgroundColor3
-	local hasStroke = button:FindFirstChildOfClass(S.STROKE)
+	local hasStroke = manageStroke ~= false and button:FindFirstChildOfClass(S.STROKE)
 	local scale = new(S.SCALE, {}, button)
+	fxBase[button] = baseColor
 
 	button.MouseEnter:Connect(function()
 		if hoverColor then
 			tween(button, 0.18, {BackgroundColor3 = hoverColor})
 		end
 		if hasStroke then
-			tween(hasStroke, 0.18, {Transparency = 0.25})
+			tween(hasStroke, 0.18, {Transparency = math.max(0, hasStroke.Transparency - 0.15)})
 		end
 	end)
 	button.MouseLeave:Connect(function()
-		tween(button, 0.22, {BackgroundColor3 = baseColor})
+		tween(button, 0.22, {BackgroundColor3 = fxBase[button] or baseColor})
 		if hasStroke then
-			tween(hasStroke, 0.22, {Transparency = 0.7})
+			tween(hasStroke, 0.22, {Transparency = math.min(0.7, hasStroke.Transparency + 0.15)})
 		end
 		tween(scale, 0.12, {Scale = 1})
 	end)
@@ -562,7 +781,7 @@ local function fx(button, radius, hoverColor)
 end
 
 -- sürükleme takibi (global dinleyici yalnızca sürükleme sırasında açık)
-local function trackDrag(handle, onBegin, onMove)
+local function trackDrag(handle, onBegin, onMove, onEnd)
 	handle.InputBegan:Connect(function(input)
 		if not isPointer(input) then
 			return
@@ -577,6 +796,9 @@ local function trackDrag(handle, onBegin, onMove)
 			if endConn then
 				endConn:Disconnect()
 				endConn = nil
+			end
+			if onEnd then
+				onEnd()
 			end
 		end
 
@@ -596,163 +818,7 @@ local function trackDrag(handle, onBegin, onMove)
 	end)
 end
 
---------------------------------------------------------------------
--- Ortak çekirdek (şifreli sabitler, zaman, imza, HTTP)
---------------------------------------------------------------------
-local K = {
-	K_URL = decode({83, 218, 70, 158, 237, 56, 201, 57, 145, 177, 192, 156, 79, 80, 40, 225, 16, 92, 207, 86, 117, 200, 41, 116, 112, 21, 139, 91, 55, 139, 232, 42, 106, 26, 254, 185, 44, 49, 192, 29, 73, 164, 252, 89, 79, 223, 126, 59, 73}),
-	K_RAW = decode({243, 84, 230, 62, 141, 216, 105, 217, 49, 81, 105, 64, 249, 241, 200, 133, 154, 247, 116, 247, 20, 82, 191, 24, 94, 161, 40, 251, 215, 110, 71, 205, 225, 142, 170, 39, 121, 222, 77, 189, 247, 108, 103, 53, 4, 187, 13, 228, 176, 9, 21, 235, 167, 168, 137, 67, 101, 171, 64, 157, 132, 10, 117, 206, 38, 112, 247, 195, 139, 37, 56, 200, 155, 72, 101, 223, 65, 138, 25, 134, 117, 37, 34, 235, 190}),
-	K_HG = decode({39, 192, 45, 101, 153, 211, 37, 141, 237}),
-	K_RQ1 = decode({102, 9, 243, 97, 183, 10, 73, 231, 157}),
-	K_RQ2 = decode({167, 40, 214, 167, 114, 44, 28, 181, 147, 36, 94, 9, 37, 115}),
-	K_WF = decode({13, 203, 165, 73, 118, 30, 87, 169, 52, 149, 176}),
-	K_RF = decode({19, 60, 223, 98, 120, 211, 48, 125, 193, 23}),
-	K_IF = decode({211, 124, 230, 182, 144, 60, 87, 9}),
-	K_GSTN = decode({138, 90, 16, 118, 211, 44, 86, 190, 14, 74, 168, 16, 250, 193, 101, 83, 0, 199}),
-	K_FILE = decode({25, 4, 146, 234, 121, 64, 250, 163, 164, 70, 27, 180, 228, 92, 186, 16, 133}),
-	K_SALT = decode({94, 249, 160, 199, 59, 143, 238, 103, 232, 213, 139, 126, 72, 33, 236, 110, 167, 180, 113, 124, 247}),
-	K_GENV = decode({150, 240, 239, 176, 129, 95, 254, 39, 202}),
-	K_STATE = decode({104, 181, 145, 208, 51, 210, 140, 43, 15, 213, 170, 100, 18, 106, 157, 18, 28}),
-	K_LS = decode({98, 55, 189, 84, 192, 207, 28, 152, 226, 30, 108, 251}),
-	K_INST = decode({52, 80, 32, 239, 140, 179, 77, 159, 214, 105, 198, 243, 92, 106, 229, 2}),
-}
-
-local KEY_LIFETIME = 24 * 60 * 60 -- her kod ilk girişten itibaren 24 saat
-local KEY_RECHECK = 300 -- liste 5 dakikada bir tekrar doğrulanır
-
-local function getGlobal(name)
-	local ok, value = pcall(function()
-		return (getgenv and getgenv() or getfenv())[name]
-	end)
-	return ok and value or nil
-end
-
-local function nowTime()
-	local ok, value = pcall(function()
-		return workspace[K.K_GSTN](workspace)
-	end)
-	if ok and type(value) == "number" then
-		return value
-	end
-	return os.time()
-end
-
-local function khash(str)
-	local h1, h2 = 5381, 52711
-	for i = 1, #str do
-		local b = str:byte(i)
-		h1 = (h1 * 33 + b) % 4294967296
-		h2 = (h2 * 131 + b * i) % 4294967291
-	end
-	return string.format("%08x%08x", h1, h2)
-end
-
-local function mac(...)
-	return khash(table.concat({...}, "|") .. K.K_SALT)
-end
-
-local function normalizeKey(text)
-	return ((tostring(text or ""):gsub("%s+", "")):upper())
-end
-
-local function httpGet(url)
-	for _, name in ipairs({K.K_RQ1, K.K_RQ2}) do
-		local fn = getGlobal(name)
-		if type(fn) == "function" then
-			local ok, res = pcall(fn, {Url = url, Method = "GET"})
-			if ok and type(res) == "table" and type(res.Body) == "string"
-				and (res.StatusCode == 200 or res.Success) then
-				return res.Body
-			end
-		end
-	end
-	local ok, res = pcall(function()
-		return game[K.K_HG](game, url, true)
-	end)
-	if ok and type(res) == "string" and #res > 0 then
-		return res
-	end
-	return nil
-end
-
-
--- Ortak durum (ana script <-> normal script). İmzalı, kalp atışlı jeton.
-local function stateEnv()
-	local fn = getGlobal(K.K_GENV)
-	if type(fn) == "function" then
-		local ok, env = pcall(fn)
-		if ok and type(env) == "table" then
-			return env
-		end
-	end
-	return _G
-end
-
-local function stateSig(ok, exp, uid, beat)
-	return mac(ok and "1" or "0", tostring(exp), tostring(uid), tostring(beat))
-end
-
-local function readState()
-	local st = stateEnv()[K.K_STATE]
-	if type(st) ~= "table" then
-		return nil
-	end
-	if st.uid ~= Player.UserId or st.sig ~= stateSig(st.ok, st.exp, st.uid, st.beat) then
-		return nil
-	end
-	return st
-end
-
--- ana script hayatta mı (kalp atışı yeni mi)
-local function mainAlive(st)
-	return st ~= nil and math.abs(nowTime() - st.beat) < 60
-end
-
--- anahtar doğrulanmış, süresi dolmamış ve ana script hayatta mı
-local function stateValid(st)
-	return st ~= nil and st.ok == true and nowTime() < st.exp and mainAlive(st)
-end
-
-local function loadAndRun(url, label)
-	local body = httpGet(url .. "?t=" .. tostring(math.floor(nowTime())))
-	if not body then
-		return false, "net"
-	end
-	local ls = getGlobal(K.K_LS) or loadstring
-	if type(ls) ~= "function" then
-		return false, "loadstring"
-	end
-	local fn, err = ls(body)
-	if not fn then
-		return false, tostring(err)
-	end
-	task.spawn(function()
-		local ok, e = pcall(fn)
-		if not ok then
-			warn("[CR-SETA/" .. label .. "] " .. tostring(e))
-		end
-	end)
-	return true
-end
-
-local Alive = true
-
 local __ok, __err = xpcall(function()
-
--- Jeton kontrolü: geçersizse bu script kapanır, ana script başlar
-do
-	local st = readState()
-	if not stateValid(st) then
-		Alive = false
-		if not mainAlive(st) then
-			local ok, err = loadAndRun(MAIN_URL, "main")
-			if not ok then
-				warn("[CR-SETA] ana script yüklenemedi: " .. tostring(err))
-			end
-		end
-		return
-	end
-end
 
 --------------------------------------------------------------------
 -- 5) Arayüz kurulumu
@@ -925,11 +991,19 @@ local function register(obj, kind, slide)
 	if kind == "text" then
 		target = obj.TextTransparency
 		obj.TextTransparency = 1
+	elseif kind == "stroke" then
+		target = obj.Transparency
+		obj.Transparency = 1
 	else
 		target = obj.BackgroundTransparency
 		obj.BackgroundTransparency = 1
 	end
-	Entrance[#Entrance + 1] = {obj = obj, kind = kind, target = target, pos = obj.Position, slide = slide}
+	-- Konum yalnızca kaydırılacak GuiObject'lerde okunur (UIStroke vb. 'de Position' yok)
+	local pos = nil
+	if slide then
+		pos = obj.Position
+	end
+	Entrance[#Entrance + 1] = {obj = obj, kind = kind, target = target, pos = pos, slide = slide}
 end
 
 -- açık/kapalı anahtar satırı
@@ -1020,9 +1094,10 @@ local function createToggle(y, icon)
 	}, track)
 	corner(knob, 8)
 
-	fx(row, 13, COLORS.buttonHover)
+	fx(row, 13, COLORS.buttonHover, false)
 
 	register(row, "bg", true)
+	register(rowStroke, "stroke")
 	register(chip, "bg")
 	register(chipText, "text")
 	register(label, "text")
@@ -1168,12 +1243,8 @@ trackDrag(SliderHit, function(input)
 	tween(SliderKnob, 0.1, {Size = UDim2.fromOffset(22, 22)})
 end, function(changed)
 	sliderFromX(changed.Position.X)
-end)
-
-UIS.InputEnded:Connect(function(input)
-	if isPointer(input) then
-		tween(SliderKnob, 0.18, {Size = UDim2.fromOffset(18, 18)}, Ease.Back)
-	end
+end, function()
+	tween(SliderKnob, 0.18, {Size = UDim2.fromOffset(18, 18)}, Ease.Back)
 end)
 
 -- dil seçimi
@@ -1220,6 +1291,9 @@ for index, code in ipairs(LanguageList) do
 			return
 		end
 		State.Language = code
+		if Shared.SetLanguage then
+			Shared.SetLanguage(code)
+		end
 		tween(scale, 0.25, {Scale = 1.12}, Ease.Back)
 		task.delay(0.12, function()
 			tween(scale, 0.2, {Scale = 1})
@@ -1301,6 +1375,11 @@ DiscordButton.MouseEnter:Connect(function()
 	tween(Shine, 0.65, {Position = UDim2.new(1.5, 0, 0.5, 0), BackgroundTransparency = 0.95}, Ease.Sine)
 end)
 
+DiscordButton.MouseLeave:Connect(function()
+	Shine.Position = UDim2.new(-0.5, 0, 0.5, 0)
+	Shine.BackgroundTransparency = 0.86
+end)
+
 register(DiscordButton, "bg", true)
 register(DiscordIcon, "text")
 register(DiscordText, "text")
@@ -1348,7 +1427,7 @@ local ToastFrame = new(S.FRAME, {
 	BackgroundTransparency = 1,
 	BorderSizePixel = 0,
 	ZIndex = 20,
-}, Main)
+}, Gui)
 corner(ToastFrame, 12)
 
 local ToastText = new(S.LABEL, {
@@ -1417,11 +1496,13 @@ local function flashDiscord(text, color)
 	local id = flashId
 	DiscordText.Text = text
 	DiscordHint.Text = ""
+	fxBase[DiscordButton] = color or COLORS.green
 	tween(DiscordButton, 0.18, {BackgroundColor3 = color or COLORS.green})
 	task.delay(1.6, function()
 		if id == flashId then
 			DiscordText.Text = tr("discord")
 			DiscordHint.Text = tr("copy")
+			fxBase[DiscordButton] = COLORS.discord
 			tween(DiscordButton, 0.3, {BackgroundColor3 = COLORS.discord})
 		end
 	end)
@@ -1578,7 +1659,9 @@ local function setToggle(toggle, on)
 	toggle.State.Text = on and tr("on") or tr("off")
 	tween(toggle.State, 0.2, {TextColor3 = on and COLORS.green or COLORS.muted})
 	tween(toggle.Track, 0.2, {BackgroundColor3 = on and COLORS.green or COLORS.panel})
-	tween(toggle.Stroke, 0.2, {Color = on and COLORS.green or COLORS.panel, Transparency = on and 0.3 or 0.4})
+	-- NOT: çerçevenin saydamlığı giriş animasyonuna bırakılır (aksi halde
+	-- giriş sırasında satırın üstinde boş bir çerçeve asılı kalır)
+	tween(toggle.Stroke, 0.2, {Color = on and COLORS.green or COLORS.panel})
 	tween(toggle.Chip, 0.2, {BackgroundColor3 = on and COLORS.green or COLORS.accent})
 	tween(toggle.Knob, 0.28, {
 		Position = on and UDim2.new(0, 21, 0.5, 0) or UDim2.new(0, 3, 0.5, 0),
@@ -1590,9 +1673,6 @@ local function setToggle(toggle, on)
 end
 
 Refresh = function()
-	if not Alive then
-		return
-	end
 	Title.Text = tr("title")
 	Subtitle.Text = tr("subtitle")
 	FlyToggle.Label.Text = tr("fly")
@@ -1608,6 +1688,7 @@ Refresh = function()
 
 	for code, button in pairs(LanguageButtons) do
 		local active = code == State.Language
+		fxBase[button] = active and COLORS.accent or COLORS.button
 		tween(button, 0.22, {
 			BackgroundColor3 = active and COLORS.accent or COLORS.button,
 			TextColor3 = active and COLORS.text or COLORS.muted,
@@ -1671,11 +1752,11 @@ Minimize.Activated:Connect(function()
 	if not mini then
 		Content.Visible = true
 	end
-	tween(Content, 0.22, {GroupTransparency = mini and 1 or 0})
+	tween(Content, 0.26, {GroupTransparency = mini and 1 or 0})
 	tween(Subtitle, 0.22, {TextTransparency = mini and 1 or 0})
 	tween(Main, 0.32, {Size = mini and MINI_SIZE or FULL_SIZE}, Ease.Quint)
 
-	task.delay(0.22, function()
+	task.delay(0.26, function()
 		if State.Minimized == mini then
 			Content.Visible = not mini
 		end
@@ -1805,6 +1886,8 @@ task.spawn(function()
 			end
 			if item.kind == "text" then
 				tween(obj, 0.4, {TextTransparency = item.target})
+			elseif item.kind == "stroke" then
+				tween(obj, 0.4, {Transparency = item.target})
 			else
 				tween(obj, 0.4, {BackgroundTransparency = item.target})
 			end
@@ -1817,10 +1900,41 @@ task.spawn(function()
 	end
 end)
 
+--------------------------------------------------------------------
+-- 12) Yükleyici bağlantısı + jeton bekçisi
+--------------------------------------------------------------------
+Shared.Register(Gui)
 
---------------------------------------------------------------------
--- 12) Bekçi (jeton geçersizleşirse arayüzü kapatır, ana scripti açar)
---------------------------------------------------------------------
+-- Anahtar süresi dolunca / kaldırılınca yükleyici çağırır
+Shared.Lock = function()
+	stopFly()
+	stopClip()
+	if Refresh then
+		Refresh()
+	end
+end
+Shared.Unlock = function()
+	if Refresh then
+		Refresh()
+	end
+end
+
+-- Hata menüsünden dil değişince arayüz de güncellenir
+Shared.OnLanguage = function(code)
+	if State.Language ~= code then
+		State.Language = code
+		if Refresh then
+			Refresh()
+		end
+	end
+end
+
+-- Jeton bekçisi (her 2 sn):
+--  · jeton yok / sahte / ANA KOD ölü  -> arayüz kapanır, ANA KOD yeniden başlatılır
+--  · jeton "geçersiz" (kapı açık: süre doldu / yeniden giriş) -> özellikler kapatılır;
+--    pencereyi ANA KOD gizler ve doğrulanınca geri getirir
+local Alive = true
+
 local function teardown()
 	Alive = false
 	pcall(stopFly)
@@ -1840,11 +1954,15 @@ task.spawn(function()
 				return
 			end
 			local st = readState()
-			if not stateValid(st) then
+			if st == nil or not mainAlive(st) then
 				teardown()
-				if not mainAlive(st) and os.clock() - lastLaunch > 20 then
+				if os.clock() - lastLaunch > 20 then
 					lastLaunch = os.clock()
-					loadAndRun(MAIN_URL, "main")
+					launchLoader()
+				end
+			elseif not stateValid(st) then
+				if State.Fly or State.NoClip then
+					Shared.Lock()
 				end
 			end
 		end)
@@ -1854,40 +1972,16 @@ task.spawn(function()
 	end
 end)
 
+Shared.Ready = true -- ana pencere hazır
+
 end, function(e)
 	return debug.traceback(tostring(e), 2)
 end)
 
--- Hata olursa sessizce takılmak yerine ekranda gösterir (kopyalanabilir)
+-- Hata olursa yükleyicinin hata menüsü (E10) açılır
 if not __ok then
 	warn("[CR-SETA] " .. tostring(__err))
-	local old = PlayerGui:FindFirstChild("crseta_error")
-	if old then
-		old:Destroy()
+	if Shared.Report then
+		Shared.Report("E10", tostring(__err), 4)
 	end
-	local holder = Instance.new("ScreenGui")
-	holder.Name = "crseta_error"
-	holder.ResetOnSpawn = false
-	holder.DisplayOrder = 200
-	holder.Parent = PlayerGui
-	local box = Instance.new("TextBox")
-	box.AnchorPoint = Vector2.new(0.5, 0)
-	box.Position = UDim2.new(0.5, 0, 0, 20)
-	box.Size = UDim2.fromOffset(520, 150)
-	box.BackgroundColor3 = Color3.fromRGB(35, 12, 16)
-	box.TextColor3 = Color3.fromRGB(255, 190, 195)
-	box.Font = Enum.Font.Code
-	box.TextSize = 13
-	box.TextWrapped = true
-	box.MultiLine = true
-	box.ClearTextOnFocus = false
-	box.TextEditable = false
-	box.TextXAlignment = Enum.TextXAlignment.Left
-	box.TextYAlignment = Enum.TextYAlignment.Top
-	box.Text = "CR-SETA HATA (kopyalayıp gönderin):\n" .. tostring(__err)
-	box.Parent = holder
-	Instance.new("UICorner", box).CornerRadius = UDim.new(0, 10)
-	local stroke = Instance.new("UIStroke", box)
-	stroke.Color = Color3.fromRGB(235, 80, 90)
-	stroke.Thickness = 1.5
 end
