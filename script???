@@ -47,6 +47,16 @@ local subLabel = UI.new("TextLabel", {
     TextXAlignment = Enum.TextXAlignment.Left, Text = "",
 }, header)
 
+-- Admin rozeti
+if getgenv().CR_ROLE == "admin" then
+    local badge = UI.new("TextLabel", {
+        AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -76, 0, 14), Size = UDim2.new(0, 56, 0, 20),
+        BackgroundColor3 = Color3.fromRGB(255, 180, 0), Text = "ADMIN", Font = Enum.Font.GothamBlack,
+        TextSize = 11, TextColor3 = Color3.fromRGB(20, 20, 20),
+    }, header)
+    UI.corner(badge, 6)
+end
+
 local function headerBtn(text, xOff)
     local b = UI.new("TextButton", {
         AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, xOff, 0, 11), Size = UDim2.new(0, 26, 0, 26),
