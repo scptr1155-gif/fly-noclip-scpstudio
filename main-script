@@ -3,7 +3,6 @@ local TweenService = game:GetService("TweenService")
 local HttpService = game:GetService("HttpService")
 local UIS = game:GetService("UserInputService")
 
--- URL çözücü (XOR 77)
 local function D(t)
     local s = {}
     for i, v in ipairs(t) do s[i] = string.char(bit32.bxor(v, 77)) end
@@ -17,7 +16,7 @@ local URL_SCRIPT  = BASE .. D({62,46,63,36,61,57,104,126,11,104,126,11,104,126,1
 local GET_KEY_URL = D({37,57,57,61,62,119,98,98,38,40,52,96,42,40,35,40,63,44,57,36,34,35,96,62,36,57,40,96,122,126,117,126,44,44,99,35,40,57,33,36,43,52,99,44,61,61,98})
 
 --------------------------------------------------------------------
--- UI yardımcıları (script??? de bunları kullanır)
+-- UI yardımcıları
 --------------------------------------------------------------------
 local UI = {}
 UI.ACCENT1 = Color3.fromRGB(0, 170, 255)
@@ -40,21 +39,31 @@ end
 function UI.tween(o, t, props, style)
     TweenService:Create(o, TweenInfo.new(t, style or Enum.EasingStyle.Quad, Enum.EasingDirection.Out), props):Play()
 end
+
+-- Gradient arka plan çerçevesinde, yazı üstteki şeffaf butonda
 function UI.button(parent, text, pos, size, c1, c2)
-    local b = UI.new("TextButton", {
-        Text = text, Position = pos, Size = size,
-        BackgroundColor3 = Color3.new(1, 1, 1), AutoButtonColor = false,
-        Font = Enum.Font.GothamBold, TextSize = 14, TextColor3 = Color3.new(1, 1, 1),
+    local wrap = UI.new("Frame", {
+        Position = pos, Size = size,
+        BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0,
     }, parent)
-    UI.corner(b, 10)
-    local g = UI.gradient(b, c1, c2, 0)
-    local sc = UI.new("UIScale", {Scale = 1}, b)
+    UI.corner(wrap, 10)
+    local g = UI.gradient(wrap, c1, c2, 0)
+    local sc = UI.new("UIScale", {Scale = 1}, wrap)
+
+    local b = UI.new("TextButton", {
+        Position = UDim2.new(0, 0, 0, 0), Size = UDim2.new(1, 0, 1, 0),
+        BackgroundTransparency = 1, AutoButtonColor = false,
+        Text = text, Font = Enum.Font.GothamBold, TextSize = 14,
+        TextColor3 = Color3.new(1, 1, 1), ZIndex = 2,
+    }, wrap)
+
     b.MouseEnter:Connect(function() UI.tween(sc, 0.12, {Scale = 1.03}) end)
     b.MouseLeave:Connect(function() UI.tween(sc, 0.12, {Scale = 1}) end)
     b.MouseButton1Down:Connect(function() UI.tween(sc, 0.08, {Scale = 0.96}) end)
     b.MouseButton1Up:Connect(function() UI.tween(sc, 0.08, {Scale = 1.03}) end)
-    return b, g
+    return b, g, wrap
 end
+
 function UI.drag(handle, frame, conns)
     local dragging, startInput, startPos = false, nil, nil
     handle.InputBegan:Connect(function(i)
@@ -99,7 +108,6 @@ local function saveCfg()
     if not canFS() then return end
     pcall(function() writefile(CONFIG_FILE, HttpService:JSONEncode(cfg)) end)
 end
-
 getgenv().CR_SaveLang = function(code)
     cfg.lang = code
     saveCfg()
@@ -131,13 +139,13 @@ getgenv().CR_GetError = getError
 
 local TEXT = {
     EN = {
-        sub = "KEY SYSTEM", pick = "Select your language", title = "Enter your key",
+        sub = "KEY SYSTEM", title = "Enter your key",
         placeholder = "Paste your key here...", getkey = "Get Key", verify = "Verify Key",
         copied = "Link copied to clipboard!", success = "Key verified! Loading...",
         lang = "Language: EN",
     },
     TR = {
-        sub = "KEY SİSTEMİ", pick = "Dilini seç", title = "Key'ini gir",
+        sub = "KEY SİSTEMİ", title = "Key'ini gir",
         placeholder = "Key'i buraya yapıştır...", getkey = "Key Al", verify = "Key Doğrula",
         copied = "Link panoya kopyalandı!", success = "Key doğrulandı! Yükleniyor...",
         lang = "Dil: TR",
@@ -217,7 +225,6 @@ function openGate(message)
     local scale = UI.new("UIScale", {Scale = 0.8}, card)
     UI.tween(scale, 0.35, {Scale = 1}, Enum.EasingStyle.Back)
 
-    -- Başlık
     local header = UI.new("Frame", {Size = UDim2.new(1, 0, 0, 70), BackgroundTransparency = 1}, card)
     UI.drag(header, card, conns)
 
@@ -231,7 +238,7 @@ function openGate(message)
     local sub = UI.new("TextLabel", {
         Position = UDim2.new(0, 0, 0, 44), Size = UDim2.new(1, 0, 0, 16),
         BackgroundTransparency = 1, Font = Enum.Font.GothamMedium, TextSize = 11,
-        TextColor3 = Color3.fromRGB(150, 150, 175),
+        TextColor3 = Color3.fromRGB(150, 150, 175), Text = "",
     }, header)
 
     local closeBtn = UI.new("TextButton", {
@@ -244,12 +251,10 @@ function openGate(message)
 
     local pages = UI.new("Frame", {Position = UDim2.new(0, 0, 0, 76), Size = UDim2.new(1, 0, 1, -76), BackgroundTransparency = 1}, card)
 
-    ----------------------------------------------------------------
     -- Sayfa 1: Dil seçimi
-    ----------------------------------------------------------------
     local langPage = UI.new("Frame", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1}, pages)
-    local pickLabel = UI.new("TextLabel", {
-        Position = UDim2.new(0, 0, 0, 0), Size = UDim2.new(1, 0, 0, 20), BackgroundTransparency = 1,
+    UI.new("TextLabel", {
+        Size = UDim2.new(1, 0, 0, 20), BackgroundTransparency = 1,
         Font = Enum.Font.GothamMedium, TextSize = 14, TextColor3 = Color3.fromRGB(210, 210, 225),
         Text = "Select your language / Dilini seç",
     }, langPage)
@@ -258,13 +263,11 @@ function openGate(message)
     enBtn.TextSize = 18
     trBtn.TextSize = 18
 
-    ----------------------------------------------------------------
     -- Sayfa 2: Key
-    ----------------------------------------------------------------
     local keyPage = UI.new("Frame", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Visible = false}, pages)
     local titleLabel = UI.new("TextLabel", {
         Size = UDim2.new(1, 0, 0, 20), BackgroundTransparency = 1, Font = Enum.Font.GothamMedium,
-        TextSize = 14, TextColor3 = Color3.fromRGB(210, 210, 225),
+        TextSize = 14, TextColor3 = Color3.fromRGB(210, 210, 225), Text = "",
     }, keyPage)
 
     local box = UI.new("TextBox", {
