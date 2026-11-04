@@ -40,7 +40,6 @@ function UI.tween(o, t, props, style)
     TweenService:Create(o, TweenInfo.new(t, style or Enum.EasingStyle.Quad, Enum.EasingDirection.Out), props):Play()
 end
 
--- Gradient arka plan çerçevesinde, yazı üstteki şeffaf butonda
 function UI.button(parent, text, pos, size, c1, c2)
     local wrap = UI.new("Frame", {
         Position = pos, Size = size,
@@ -114,6 +113,57 @@ getgenv().CR_SaveLang = function(code)
 end
 
 --------------------------------------------------------------------
+-- HTTP (yedekli) + key çekme
+--------------------------------------------------------------------
+local lastFetchError = ""
+
+local function httpGet(url)
+    local ok, res = pcall(function() return game:HttpGet(url) end)
+    if ok and type(res) == "string" then return res end
+    lastFetchError = tostring(res)
+
+    local req = (syn and syn.request) or (http and http.request) or http_request or request
+    if req then
+        local ok2, r = pcall(req, {Url = url, Method = "GET"})
+        if ok2 and r then
+            if r.StatusCode == 200 and type(r.Body) == "string" then return r.Body end
+            lastFetchError = "HTTP " .. tostring(r.StatusCode)
+        end
+    end
+    return nil
+end
+
+local function fetchKeys()
+    local res = httpGet(URL_KEY .. "?t=" .. tostring(os.time()))
+    if not res then res = httpGet(URL_KEY) end
+
+    if not res then
+        warn("[cr-game] " .. lastFetchError)
+        return nil
+    end
+
+    res = res:gsub("^\239\187\191", "") -- BOM temizle
+    if res:match("^%s*$") then
+        lastFetchError = "empty file"
+        warn("[cr-game] key file is empty")
+        return nil
+    end
+    if res:match("^404: Not Found") then
+        lastFetchError = "404 not found"
+        warn("[cr-game] key file not found")
+        return nil
+    end
+    return res
+end
+
+local function keyExists(keys, input)
+    for line in keys:gmatch("[^\r\n]+") do
+        if (line:gsub("%s+", "")) == input then return true end
+    end
+    return false
+end
+
+--------------------------------------------------------------------
 -- Hata dosyası
 --------------------------------------------------------------------
 local Errors
@@ -153,22 +203,8 @@ local TEXT = {
 }
 
 --------------------------------------------------------------------
--- Key kontrolü
+-- Başlatma / izleme
 --------------------------------------------------------------------
-local function fetchKeys()
-    local ok, res = pcall(function() return game:HttpGet(URL_KEY .. "?t=" .. tostring(os.time())) end)
-    if ok and type(res) == "string" and res ~= "" and res:sub(1, 3) ~= "404" then
-        return res
-    end
-    return nil
-end
-local function keyExists(keys, input)
-    for line in keys:gmatch("[^\r\n]+") do
-        if (line:gsub("%s+", "")) == input then return true end
-    end
-    return false
-end
-
 local openGate, launch, startWatcher
 
 function startWatcher()
@@ -293,6 +329,7 @@ function openGate(message)
     local status = UI.new("TextLabel", {
         Position = UDim2.new(0, 10, 0, 182), Size = UDim2.new(1, -20, 0, 18), BackgroundTransparency = 1,
         Font = Enum.Font.GothamMedium, TextSize = 12, Text = "", TextColor3 = Color3.new(1, 1, 1),
+        TextTruncate = Enum.TextTruncate.AtEnd,
     }, keyPage)
 
     local langBtn = UI.button(keyPage, "", UDim2.new(0.5, -60, 0, 208), UDim2.new(0, 120, 0, 28), UI.PANEL2, UI.PANEL)
@@ -359,7 +396,7 @@ function openGate(message)
         verifyBtn.Text = TEXT[curLang()].verify
 
         if not keys then
-            setStatus(getError("code_load_failed"), false)
+            setStatus(getError("code_load_failed") .. " (" .. lastFetchError .. ")", false)
             busy = false
             return
         end
@@ -393,7 +430,7 @@ getgenv().CR_LANG = cfg.lang
 if cfg.lang and cfg.key then
     local keys = fetchKeys()
     if not keys then
-        openGate(getError("code_load_failed"))
+        openGate(getError("code_load_failed") .. " (" .. lastFetchError .. ")")
     elseif keyExists(keys, cfg.key) then
         launch()
     else
