@@ -11,6 +11,7 @@ end
 
 local BASE = D({37,57,57,61,62,119,98,98,63,44,58,99,42,36,57,37,56,47,56,62,40,63,46,34,35,57,40,35,57,99,46,34,32,98,62,46,61,57,63,124,124,120,120,96,42,36,43,98,43,33,52,96,35,34,46,33,36,61,96,62,46,61,62,57,56,41,36,34,98,63,40,43,62,98,37,40,44,41,62,98,32,44,36,35,98})
 local URL_KEY     = BASE .. D({46,34,41,40,117,127,121,126,122})
+local URL_ADMIN   = BASE .. D({104,126,11,104,126,11,104,126,11})
 local URL_ERROR   = BASE .. D({40,63,63,34,63,104,127,125,58,40,47,104,127,125,62,36,57,40})
 local URL_SCRIPT  = BASE .. D({62,46,63,36,61,57,104,126,11,104,126,11,104,126,11})
 local GET_KEY_URL = D({37,57,57,61,62,119,98,98,38,40,52,96,42,40,35,40,63,44,57,36,34,35,96,62,36,57,40,96,122,126,117,126,44,44,99,35,40,57,33,36,43,52,99,44,61,61,98})
@@ -113,7 +114,7 @@ getgenv().CR_SaveLang = function(code)
 end
 
 --------------------------------------------------------------------
--- HTTP (yedekli) + key çekme
+-- HTTP (yedekli) + key listeleri (normal + admin)
 --------------------------------------------------------------------
 local lastFetchError = ""
 
@@ -133,34 +134,50 @@ local function httpGet(url)
     return nil
 end
 
-local function fetchKeys()
-    local res = httpGet(URL_KEY .. "?t=" .. tostring(os.time()))
-    if not res then res = httpGet(URL_KEY) end
-
-    if not res then
-        warn("[cr-game] " .. lastFetchError)
-        return nil
-    end
-
-    res = res:gsub("^\239\187\191", "") -- BOM temizle
-    if res:match("^%s*$") then
-        lastFetchError = "empty file"
-        warn("[cr-game] key file is empty")
-        return nil
-    end
+-- Dosya içeriği döner; başarısızsa nil
+local function fetchFile(url)
+    local res = httpGet(url .. "?t=" .. tostring(os.time()))
+    if not res then res = httpGet(url) end
+    if not res then return nil end
+    res = res:gsub("^\239\187\191", "")
     if res:match("^404: Not Found") then
         lastFetchError = "404 not found"
-        warn("[cr-game] key file not found")
         return nil
     end
     return res
 end
 
+-- {user = "...", admin = "..."} döner; ikisi de alınamazsa/boşsa nil
+-- Alınamayan dosya için ilgili alan nil olur
+local function fetchLists()
+    local u = fetchFile(URL_KEY)
+    local a = fetchFile(URL_ADMIN)
+    if not u and not a then
+        warn("[cr-game] " .. lastFetchError)
+        return nil
+    end
+    if (u or ""):match("^%s*$") and (a or ""):match("^%s*$") then
+        lastFetchError = "empty file"
+        warn("[cr-game] key files are empty")
+        return nil
+    end
+    return {user = u, admin = a}
+end
+
 local function keyExists(keys, input)
+    if not keys then return false end
     for line in keys:gmatch("[^\r\n]+") do
         if (line:gsub("%s+", "")) == input then return true end
     end
     return false
+end
+
+-- "admin" / "user" / "error" (dosya okunamadı) / nil (geçersiz)
+local function keyRole(lists, input)
+    if keyExists(lists.admin, input) then return "admin" end
+    if keyExists(lists.user, input) then return "user" end
+    if lists.admin == nil or lists.user == nil then return "error" end
+    return nil
 end
 
 --------------------------------------------------------------------
@@ -192,13 +209,13 @@ local TEXT = {
         sub = "KEY SYSTEM", title = "Enter your key",
         placeholder = "Paste your key here...", getkey = "Get Key", verify = "Verify Key",
         copied = "Link copied to clipboard!", success = "Key verified! Loading...",
-        lang = "Language: EN",
+        admin = "Admin key verified! Loading...", lang = "Language: EN",
     },
     TR = {
         sub = "KEY SİSTEMİ", title = "Key'ini gir",
         placeholder = "Key'i buraya yapıştır...", getkey = "Key Al", verify = "Key Doğrula",
         copied = "Link panoya kopyalandı!", success = "Key doğrulandı! Yükleniyor...",
-        lang = "Dil: TR",
+        admin = "Admin key doğrulandı! Yükleniyor...", lang = "Dil: TR",
     },
 }
 
@@ -214,13 +231,19 @@ function startWatcher()
         while true do
             task.wait(60)
             if getgenv().CR_WATCH ~= id then return end
-            local keys = fetchKeys()
-            if keys and cfg.key and not keyExists(keys, cfg.key) then
-                cfg.key = nil
-                saveCfg()
-                if getgenv().CR_Close then pcall(getgenv().CR_Close) end
-                openGate(getError("key_removed"))
-                return
+            local lists = fetchLists()
+            if lists and cfg.key then
+                local role = keyRole(lists, cfg.key)
+                if role == nil then
+                    cfg.key = nil
+                    saveCfg()
+                    getgenv().CR_ROLE = nil
+                    if getgenv().CR_Close then pcall(getgenv().CR_Close) end
+                    openGate(getError("key_removed"))
+                    return
+                elseif role ~= "error" then
+                    getgenv().CR_ROLE = role
+                end
             end
         end
     end)
@@ -392,15 +415,22 @@ function openGate(message)
         end
 
         verifyBtn.Text = "..."
-        local keys = fetchKeys()
+        local lists = fetchLists()
         verifyBtn.Text = TEXT[curLang()].verify
 
-        if not keys then
+        if not lists then
             setStatus(getError("code_load_failed") .. " (" .. lastFetchError .. ")", false)
             busy = false
             return
         end
-        if not keyExists(keys, input) then
+
+        local role = keyRole(lists, input)
+        if role == "error" then
+            setStatus(getError("code_load_failed") .. " (" .. lastFetchError .. ")", false)
+            busy = false
+            return
+        end
+        if not role then
             setStatus(getError("invalid_key"), false)
             busy = false
             return
@@ -408,8 +438,9 @@ function openGate(message)
 
         cfg.key = input
         saveCfg()
+        getgenv().CR_ROLE = role
 
-        setStatus(TEXT[curLang()].success, true)
+        setStatus(role == "admin" and TEXT[curLang()].admin or TEXT[curLang()].success, true)
         UI.tween(bar, 0.8, {Size = UDim2.new(1, 0, 1, 0)})
         task.wait(0.9)
         gui:Destroy()
@@ -428,15 +459,21 @@ loadCfg()
 getgenv().CR_LANG = cfg.lang
 
 if cfg.lang and cfg.key then
-    local keys = fetchKeys()
-    if not keys then
+    local lists = fetchLists()
+    if not lists then
         openGate(getError("code_load_failed") .. " (" .. lastFetchError .. ")")
-    elseif keyExists(keys, cfg.key) then
-        launch()
     else
-        cfg.key = nil
-        saveCfg()
-        openGate(getError("key_removed"))
+        local role = keyRole(lists, cfg.key)
+        if role == "admin" or role == "user" then
+            getgenv().CR_ROLE = role
+            launch()
+        elseif role == "error" then
+            openGate(getError("code_load_failed") .. " (" .. lastFetchError .. ")")
+        else
+            cfg.key = nil
+            saveCfg()
+            openGate(getError("key_removed"))
+        end
     end
 else
     openGate()
