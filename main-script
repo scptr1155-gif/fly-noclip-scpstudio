@@ -1,7 +1,20 @@
-if not game:IsLoaded() then game.Loaded:Wait() end
+print("[cr-game] starting...")
 
--- Tekrar çalıştırma / döngü koruması
-if getgenv().CR_BOOT and (os.clock() - getgenv().CR_BOOT) < 10 then return end
+local StarterGui = game:GetService("StarterGui")
+local function notify(txt)
+    pcall(function()
+        StarterGui:SetCore("SendNotification", {Title = "cr-game", Text = txt, Duration = 4})
+    end)
+end
+
+if not game:IsLoaded() then game.Loaded:Wait() end
+notify("Loading... / Yükleniyor...")
+
+-- Çift çalıştırma koruması (3 sn)
+if getgenv().CR_BOOT and (os.clock() - getgenv().CR_BOOT) < 3 then
+    notify("Already running / Zaten çalışıyor")
+    return
+end
 getgenv().CR_BOOT = os.clock()
 
 local Players = game:GetService("Players")
@@ -90,13 +103,40 @@ function UI.drag(handle, frame, conns)
     end))
 end
 
--- GUI konumu: gethui -> PlayerGui (CoreGui'ye dokunmaz, çökmeyi önler)
+-- GUI konumu: gethui -> CoreGui -> PlayerGui (çalışan ilk konum seçilir)
+local cachedParent
 function UI.parent()
+    if cachedParent and cachedParent.Parent then return cachedParent end
+
+    local candidates = {}
     if gethui then
-        local ok, h = pcall(gethui)
-        if ok and h then return h end
+        table.insert(candidates, {"gethui", function() return gethui() end})
     end
-    return Players.LocalPlayer:WaitForChild("PlayerGui")
+    table.insert(candidates, {"CoreGui", function() return game:GetService("CoreGui") end})
+    table.insert(candidates, {"PlayerGui", function() return Players.LocalPlayer:WaitForChild("PlayerGui", 10) end})
+
+    for _, c in ipairs(candidates) do
+        local ok, container = pcall(c[2])
+        if ok and container then
+            local ok2, good = pcall(function()
+                local probe = Instance.new("ScreenGui")
+                probe.Name = "CRProbe"
+                probe.Parent = container
+                local fine = (probe.Parent == container)
+                probe:Destroy()
+                return fine
+            end)
+            if ok2 and good then
+                print("[cr-game] GUI parent: " .. c[1])
+                cachedParent = container
+                return container
+            end
+        end
+    end
+
+    print("[cr-game] GUI parent: fallback PlayerGui")
+    cachedParent = Players.LocalPlayer:WaitForChild("PlayerGui")
+    return cachedParent
 end
 getgenv().CR_UI = UI
 
@@ -126,7 +166,7 @@ getgenv().CR_SaveLang = function(code)
 end
 
 --------------------------------------------------------------------
--- HTTP + key listeleri (paralel, tek deneme)
+-- HTTP + key listeleri
 --------------------------------------------------------------------
 local lastFetchError = ""
 
@@ -194,7 +234,7 @@ local function keyRole(lists, input)
 end
 
 --------------------------------------------------------------------
--- Hata mesajları (varsayılan hemen hazır, GitHub'dan arka planda güncellenir)
+-- Hata mesajları (varsayılan hazır, GitHub'dan arka planda güncellenir)
 --------------------------------------------------------------------
 local Errors = {
     EN = {
@@ -291,6 +331,7 @@ function launch(firstCheckDelay)
     end)
     if not ok then
         warn("[cr-game] " .. tostring(err))
+        notify(getError("script_load_failed"))
         openGate(getError("script_load_failed"))
         return false
     end
@@ -306,7 +347,7 @@ function openGate(message)
     local old = parent:FindFirstChild("CRGameGate")
     if old then old:Destroy() end
 
-    local gui = UI.new("ScreenGui", {Name = "CRGameGate", ResetOnSpawn = false, ZIndexBehavior = Enum.ZIndexBehavior.Sibling}, parent)
+    local gui = UI.new("ScreenGui", {Name = "CRGameGate", ResetOnSpawn = false, DisplayOrder = 999, ZIndexBehavior = Enum.ZIndexBehavior.Sibling}, parent)
     local conns = {}
     gui.Destroying:Connect(function() for _, c in ipairs(conns) do c:Disconnect() end end)
 
@@ -497,12 +538,12 @@ end
 local function showLoading()
     local alive = true
     local gui
-    pcall(function()
+    local ok, err = pcall(function()
         local parent = UI.parent()
         local old = parent:FindFirstChild("CRGameLoading")
         if old then old:Destroy() end
 
-        gui = UI.new("ScreenGui", {Name = "CRGameLoading", ResetOnSpawn = false, ZIndexBehavior = Enum.ZIndexBehavior.Sibling}, parent)
+        gui = UI.new("ScreenGui", {Name = "CRGameLoading", ResetOnSpawn = false, DisplayOrder = 999, ZIndexBehavior = Enum.ZIndexBehavior.Sibling}, parent)
 
         local card = UI.new("Frame", {
             AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 0),
@@ -552,6 +593,7 @@ local function showLoading()
             end
         end)
     end)
+    if not ok then warn("[cr-game] loading gui error: " .. tostring(err)) end
 
     return function()
         alive = false
@@ -565,6 +607,7 @@ end
 local function start()
     loadCfg()
     getgenv().CR_LANG = cfg.lang
+    print("[cr-game] config loaded. lang=" .. tostring(cfg.lang) .. " key=" .. tostring(cfg.key ~= nil))
 
     local closeLoading = showLoading()
 
@@ -575,7 +618,7 @@ local function start()
         closeLoading()
     else
         -- İlk giriş: kısa loading, sonra (dil seçimi ->) key menüsü
-        task.wait(0.6)
+        task.wait(0.8)
         closeLoading()
         openGate()
     end
@@ -584,9 +627,13 @@ end
 local ok, err = pcall(start)
 if not ok then
     warn("[cr-game] start error: " .. tostring(err))
+    notify("Error: " .. tostring(err))
     local ok2, err2 = pcall(function()
         cfg = {}
         openGate()
     end)
-    if not ok2 then warn("[cr-game] gui error: " .. tostring(err2)) end
+    if not ok2 then
+        warn("[cr-game] gui error: " .. tostring(err2))
+        notify("GUI error: " .. tostring(err2))
+    end
 end
