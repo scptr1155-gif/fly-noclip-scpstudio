@@ -1,3 +1,5 @@
+if not game:IsLoaded() then game.Loaded:Wait() end
+
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local HttpService = game:GetService("HttpService")
@@ -83,8 +85,23 @@ function UI.drag(handle, frame, conns)
         end
     end))
 end
+
+-- GUI konumu: gethui -> CoreGui -> PlayerGui
 function UI.parent()
-    return (gethui and gethui()) or game:GetService("CoreGui")
+    if gethui then
+        local ok, h = pcall(gethui)
+        if ok and h then return h end
+    end
+    local ok, core = pcall(function()
+        local c = game:GetService("CoreGui")
+        local test = Instance.new("Folder")
+        test.Parent = c
+        test:Destroy()
+        return c
+    end)
+    if ok and core then return core end
+    local lp = Players.LocalPlayer
+    return lp:WaitForChild("PlayerGui")
 end
 getgenv().CR_UI = UI
 
@@ -134,7 +151,6 @@ local function httpGet(url)
     return nil
 end
 
--- Dosya içeriği döner; başarısızsa nil
 local function fetchFile(url)
     local res = httpGet(url .. "?t=" .. tostring(os.time()))
     if not res then res = httpGet(url) end
@@ -147,8 +163,6 @@ local function fetchFile(url)
     return res
 end
 
--- {user = "...", admin = "..."} döner; ikisi de alınamazsa/boşsa nil
--- Alınamayan dosya için ilgili alan nil olur
 local function fetchLists()
     local u = fetchFile(URL_KEY)
     local a = fetchFile(URL_ADMIN)
@@ -209,13 +223,13 @@ local TEXT = {
         sub = "KEY SYSTEM", title = "Enter your key",
         placeholder = "Paste your key here...", getkey = "Get Key", verify = "Verify Key",
         copied = "Link copied to clipboard!", success = "Key verified! Loading...",
-        admin = "Admin key verified! Loading...", lang = "Language: EN",
+        admin = "Admin key verified! Loading...", lang = "Language: EN", loading = "Loading...",
     },
     TR = {
         sub = "KEY SİSTEMİ", title = "Key'ini gir",
         placeholder = "Key'i buraya yapıştır...", getkey = "Key Al", verify = "Key Doğrula",
         copied = "Link panoya kopyalandı!", success = "Key doğrulandı! Yükleniyor...",
-        admin = "Admin key doğrulandı! Yükleniyor...", lang = "Dil: TR",
+        admin = "Admin key doğrulandı! Yükleniyor...", lang = "Dil: TR", loading = "Yükleniyor...",
     },
 }
 
@@ -231,8 +245,8 @@ function startWatcher()
         while true do
             task.wait(60)
             if getgenv().CR_WATCH ~= id then return end
-            local lists = fetchLists()
-            if lists and cfg.key then
+            local ok, lists = pcall(fetchLists)
+            if ok and lists and cfg.key then
                 local role = keyRole(lists, cfg.key)
                 if role == nil then
                     cfg.key = nil
@@ -453,28 +467,64 @@ function openGate(message)
 end
 
 --------------------------------------------------------------------
--- Başlangıç
+-- Yükleniyor kutusu (kayıtlı key kontrolü sırasında)
 --------------------------------------------------------------------
-loadCfg()
-getgenv().CR_LANG = cfg.lang
+local function showLoading()
+    local ok, g = pcall(function()
+        local gui = UI.new("ScreenGui", {Name = "CRGameLoading", ResetOnSpawn = false}, UI.parent())
+        local f = UI.new("Frame", {
+            AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 20), Size = UDim2.new(0, 200, 0, 40),
+            BackgroundColor3 = Color3.fromRGB(24, 24, 40), BorderSizePixel = 0,
+        }, gui)
+        UI.corner(f, 10)
+        UI.new("TextLabel", {
+            Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Font = Enum.Font.GothamBold,
+            TextSize = 14, TextColor3 = Color3.new(1, 1, 1), Text = "cr-game | " .. TEXT[curLang()].loading,
+        }, f)
+        return gui
+    end)
+    return ok and g or nil
+end
 
-if cfg.lang and cfg.key then
-    local lists = fetchLists()
-    if not lists then
-        openGate(getError("code_load_failed") .. " (" .. lastFetchError .. ")")
-    else
-        local role = keyRole(lists, cfg.key)
-        if role == "admin" or role == "user" then
-            getgenv().CR_ROLE = role
-            launch()
-        elseif role == "error" then
+--------------------------------------------------------------------
+-- Başlangıç (korumalı)
+--------------------------------------------------------------------
+local function start()
+    loadCfg()
+    getgenv().CR_LANG = cfg.lang
+
+    if cfg.lang and cfg.key then
+        local loading = showLoading()
+        local lists = fetchLists()
+        if loading then loading:Destroy() end
+
+        if not lists then
             openGate(getError("code_load_failed") .. " (" .. lastFetchError .. ")")
         else
-            cfg.key = nil
-            saveCfg()
-            openGate(getError("key_removed"))
+            local role = keyRole(lists, cfg.key)
+            if role == "admin" or role == "user" then
+                getgenv().CR_ROLE = role
+                launch()
+            elseif role == "error" then
+                openGate(getError("code_load_failed") .. " (" .. lastFetchError .. ")")
+            else
+                cfg.key = nil
+                saveCfg()
+                openGate(getError("key_removed"))
+            end
         end
+    else
+        openGate()
     end
-else
-    openGate()
+end
+
+local ok, err = pcall(start)
+if not ok then
+    warn("[cr-game] start error: " .. tostring(err))
+    -- Son çare: kayıtlı veriyi sıfırlayıp key ekranını aç
+    local ok2, err2 = pcall(function()
+        cfg = {}
+        openGate()
+    end)
+    if not ok2 then warn("[cr-game] gui error: " .. tostring(err2)) end
 end
