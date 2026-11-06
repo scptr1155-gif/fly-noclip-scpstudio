@@ -1,5 +1,9 @@
 if not game:IsLoaded() then game.Loaded:Wait() end
 
+-- Tekrar çalıştırma / döngü koruması
+if getgenv().CR_BOOT and (os.clock() - getgenv().CR_BOOT) < 10 then return end
+getgenv().CR_BOOT = os.clock()
+
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local HttpService = game:GetService("HttpService")
@@ -86,27 +90,18 @@ function UI.drag(handle, frame, conns)
     end))
 end
 
--- GUI konumu: gethui -> CoreGui -> PlayerGui
+-- GUI konumu: gethui -> PlayerGui (CoreGui'ye dokunmaz, çökmeyi önler)
 function UI.parent()
     if gethui then
         local ok, h = pcall(gethui)
         if ok and h then return h end
     end
-    local ok, core = pcall(function()
-        local c = game:GetService("CoreGui")
-        local test = Instance.new("Folder")
-        test.Parent = c
-        test:Destroy()
-        return c
-    end)
-    if ok and core then return core end
-    local lp = Players.LocalPlayer
-    return lp:WaitForChild("PlayerGui")
+    return Players.LocalPlayer:WaitForChild("PlayerGui")
 end
 getgenv().CR_UI = UI
 
 --------------------------------------------------------------------
--- Kayıt sistemi (dil + key)
+-- Kayıt sistemi (dil + key + rol)
 --------------------------------------------------------------------
 local CONFIG_FILE = "crgame_config.json"
 local cfg = {}
@@ -131,7 +126,7 @@ getgenv().CR_SaveLang = function(code)
 end
 
 --------------------------------------------------------------------
--- HTTP (yedekli) + key listeleri (normal + admin)
+-- HTTP + key listeleri (paralel, tek deneme)
 --------------------------------------------------------------------
 local lastFetchError = ""
 
@@ -153,7 +148,6 @@ end
 
 local function fetchFile(url)
     local res = httpGet(url .. "?t=" .. tostring(os.time()))
-    if not res then res = httpGet(url) end
     if not res then return nil end
     res = res:gsub("^\239\187\191", "")
     if res:match("^404: Not Found") then
@@ -164,8 +158,13 @@ local function fetchFile(url)
 end
 
 local function fetchLists()
-    local u = fetchFile(URL_KEY)
-    local a = fetchFile(URL_ADMIN)
+    local u, a, doneU, doneA = nil, nil, false, false
+    task.spawn(function() u = fetchFile(URL_KEY); doneU = true end)
+    task.spawn(function() a = fetchFile(URL_ADMIN); doneA = true end)
+
+    local t0 = os.clock()
+    while not (doneU and doneA) and (os.clock() - t0) < 15 do task.wait(0.05) end
+
     if not u and not a then
         warn("[cr-game] " .. lastFetchError)
         return nil
@@ -195,20 +194,36 @@ local function keyRole(lists, input)
 end
 
 --------------------------------------------------------------------
--- Hata dosyası
+-- Hata mesajları (varsayılan hemen hazır, GitHub'dan arka planda güncellenir)
 --------------------------------------------------------------------
-local Errors
-do
+local Errors = {
+    EN = {
+        code_load_failed = "Code could not be loaded!", script_load_failed = "Script could not be loaded!",
+        invalid_key = "Invalid key!", empty_key = "Please enter a key!",
+        key_removed = "Your key is no longer valid, enter a new key!",
+        clipboard_unsupported = "Your executor does not support clipboard!",
+        character_not_found = "Character not found!",
+    },
+    TR = {
+        code_load_failed = "Kod yüklenemedi!", script_load_failed = "Script yüklenemedi!",
+        invalid_key = "Geçersiz key!", empty_key = "Lütfen bir key gir!",
+        key_removed = "Key'in artık geçerli değil, yeni key gir!",
+        clipboard_unsupported = "Executor'ın panoyu desteklemiyor!",
+        character_not_found = "Karakter bulunamadı!",
+    },
+}
+task.spawn(function()
     local ok, res = pcall(function() return loadstring(game:HttpGet(URL_ERROR))() end)
     if ok and type(res) == "table" then
-        Errors = res
-    else
-        Errors = {
-            EN = { code_load_failed = "Code could not be loaded!", error_file_failed = "Error file could not be loaded!" },
-            TR = { code_load_failed = "Kod yüklenemedi!", error_file_failed = "Hata dosyası yüklenemedi!" },
-        }
+        for lang, tbl in pairs(res) do
+            if type(tbl) == "table" then
+                Errors[lang] = Errors[lang] or {}
+                for k, v in pairs(tbl) do Errors[lang][k] = v end
+            end
+        end
     end
-end
+end)
+
 local function curLang()
     return (getgenv().CR_LANG == "TR") and "TR" or "EN"
 end
@@ -223,13 +238,13 @@ local TEXT = {
         sub = "KEY SYSTEM", title = "Enter your key",
         placeholder = "Paste your key here...", getkey = "Get Key", verify = "Verify Key",
         copied = "Link copied to clipboard!", success = "Key verified! Loading...",
-        admin = "Admin key verified! Loading...", lang = "Language: EN", loading = "Loading...",
+        admin = "Admin key verified! Loading...", lang = "Language: EN", loading = "Loading",
     },
     TR = {
         sub = "KEY SİSTEMİ", title = "Key'ini gir",
         placeholder = "Key'i buraya yapıştır...", getkey = "Key Al", verify = "Key Doğrula",
         copied = "Link panoya kopyalandı!", success = "Key doğrulandı! Yükleniyor...",
-        admin = "Admin key doğrulandı! Yükleniyor...", lang = "Dil: TR", loading = "Yükleniyor...",
+        admin = "Admin key doğrulandı! Yükleniyor...", lang = "Dil: TR", loading = "Yükleniyor",
     },
 }
 
@@ -238,18 +253,21 @@ local TEXT = {
 --------------------------------------------------------------------
 local openGate, launch, startWatcher
 
-function startWatcher()
+function startWatcher(firstDelay)
     getgenv().CR_WATCH = (getgenv().CR_WATCH or 0) + 1
     local id = getgenv().CR_WATCH
     task.spawn(function()
+        local delay = firstDelay or 60
         while true do
-            task.wait(60)
+            task.wait(delay)
+            delay = 60
             if getgenv().CR_WATCH ~= id then return end
             local ok, lists = pcall(fetchLists)
             if ok and lists and cfg.key then
                 local role = keyRole(lists, cfg.key)
                 if role == nil then
                     cfg.key = nil
+                    cfg.role = nil
                     saveCfg()
                     getgenv().CR_ROLE = nil
                     if getgenv().CR_Close then pcall(getgenv().CR_Close) end
@@ -257,20 +275,26 @@ function startWatcher()
                     return
                 elseif role ~= "error" then
                     getgenv().CR_ROLE = role
+                    if cfg.role ~= role then cfg.role = role saveCfg() end
                 end
             end
         end
     end)
 end
 
-function launch()
-    local ok, err = pcall(function() loadstring(game:HttpGet(URL_SCRIPT))() end)
+function launch(firstCheckDelay)
+    local ok, err = pcall(function()
+        local src = game:HttpGet(URL_SCRIPT)
+        local fn, perr = loadstring(src)
+        if not fn then error(perr) end
+        fn()
+    end)
     if not ok then
         warn("[cr-game] " .. tostring(err))
         openGate(getError("script_load_failed"))
         return false
     end
-    startWatcher()
+    startWatcher(firstCheckDelay)
     return true
 end
 
@@ -451,14 +475,15 @@ function openGate(message)
         end
 
         cfg.key = input
+        cfg.role = role
         saveCfg()
         getgenv().CR_ROLE = role
 
         setStatus(role == "admin" and TEXT[curLang()].admin or TEXT[curLang()].success, true)
-        UI.tween(bar, 0.8, {Size = UDim2.new(1, 0, 1, 0)})
-        task.wait(0.9)
+        UI.tween(bar, 0.6, {Size = UDim2.new(1, 0, 1, 0)})
+        task.wait(0.6)
         gui:Destroy()
-        launch()
+        launch(60)
     end)
 
     refreshTexts()
@@ -467,53 +492,91 @@ function openGate(message)
 end
 
 --------------------------------------------------------------------
--- Yükleniyor kutusu (kayıtlı key kontrolü sırasında)
+-- Loading kutusu
 --------------------------------------------------------------------
 local function showLoading()
-    local ok, g = pcall(function()
-        local gui = UI.new("ScreenGui", {Name = "CRGameLoading", ResetOnSpawn = false}, UI.parent())
-        local f = UI.new("Frame", {
-            AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 20), Size = UDim2.new(0, 200, 0, 40),
-            BackgroundColor3 = Color3.fromRGB(24, 24, 40), BorderSizePixel = 0,
+    local alive = true
+    local gui
+    pcall(function()
+        local parent = UI.parent()
+        local old = parent:FindFirstChild("CRGameLoading")
+        if old then old:Destroy() end
+
+        gui = UI.new("ScreenGui", {Name = "CRGameLoading", ResetOnSpawn = false, ZIndexBehavior = Enum.ZIndexBehavior.Sibling}, parent)
+
+        local card = UI.new("Frame", {
+            AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 0),
+            Size = UDim2.new(0, 260, 0, 120), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0,
         }, gui)
-        UI.corner(f, 10)
-        UI.new("TextLabel", {
-            Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Font = Enum.Font.GothamBold,
-            TextSize = 14, TextColor3 = Color3.new(1, 1, 1), Text = "cr-game | " .. TEXT[curLang()].loading,
-        }, f)
-        return gui
+        UI.corner(card, 16)
+        UI.gradient(card, Color3.fromRGB(24, 24, 40), Color3.fromRGB(12, 12, 20), 90)
+        local stroke = UI.new("UIStroke", {Thickness = 1.5, Color = Color3.new(1, 1, 1)}, card)
+        UI.gradient(stroke, UI.ACCENT1, UI.ACCENT2, 45)
+
+        local logo = UI.new("TextLabel", {
+            Position = UDim2.new(0, 0, 0, 12), Size = UDim2.new(1, 0, 0, 34), BackgroundTransparency = 1,
+            Text = "cr-game", Font = Enum.Font.GothamBlack, TextSize = 28, TextColor3 = Color3.new(1, 1, 1),
+        }, card)
+        UI.gradient(logo, UI.ACCENT1, UI.ACCENT2, 0)
+
+        local label = UI.new("TextLabel", {
+            Position = UDim2.new(0, 0, 0, 54), Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1,
+            Font = Enum.Font.GothamMedium, TextSize = 15, TextColor3 = Color3.fromRGB(220, 220, 235), Text = "",
+        }, card)
+
+        local barBg = UI.new("Frame", {
+            Position = UDim2.new(0.5, -90, 0, 88), Size = UDim2.new(0, 180, 0, 5),
+            BackgroundColor3 = UI.PANEL2, BorderSizePixel = 0, ClipsDescendants = true,
+        }, card)
+        UI.corner(barBg, 3)
+        local runner = UI.new("Frame", {
+            Position = UDim2.new(-0.4, 0, 0, 0), Size = UDim2.new(0.4, 0, 1, 0),
+            BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0,
+        }, barBg)
+        UI.corner(runner, 3)
+        UI.gradient(runner, UI.ACCENT1, UI.ACCENT2, 0)
+
+        task.spawn(function()
+            local n = 0
+            while alive and gui and gui.Parent do
+                n = (n % 3) + 1
+                local base
+                if cfg.lang == "TR" then base = TEXT.TR.loading
+                elseif cfg.lang == "EN" then base = TEXT.EN.loading
+                else base = TEXT.EN.loading .. " / " .. TEXT.TR.loading end
+                label.Text = base .. string.rep(".", n)
+
+                runner.Position = UDim2.new(-0.4, 0, 0, 0)
+                UI.tween(runner, 0.8, {Position = UDim2.new(1, 0, 0, 0)}, Enum.EasingStyle.Linear)
+                task.wait(0.8)
+            end
+        end)
     end)
-    return ok and g or nil
+
+    return function()
+        alive = false
+        if gui then pcall(function() gui:Destroy() end) end
+    end
 end
 
 --------------------------------------------------------------------
--- Başlangıç (korumalı)
+-- Başlangıç
 --------------------------------------------------------------------
 local function start()
     loadCfg()
     getgenv().CR_LANG = cfg.lang
 
-    if cfg.lang and cfg.key then
-        local loading = showLoading()
-        local lists = fetchLists()
-        if loading then loading:Destroy() end
+    local closeLoading = showLoading()
 
-        if not lists then
-            openGate(getError("code_load_failed") .. " (" .. lastFetchError .. ")")
-        else
-            local role = keyRole(lists, cfg.key)
-            if role == "admin" or role == "user" then
-                getgenv().CR_ROLE = role
-                launch()
-            elseif role == "error" then
-                openGate(getError("code_load_failed") .. " (" .. lastFetchError .. ")")
-            else
-                cfg.key = nil
-                saveCfg()
-                openGate(getError("key_removed"))
-            end
-        end
+    if cfg.lang and cfg.key then
+        -- Kayıtlı key var: beklemeden direkt script, doğrulama arka planda
+        getgenv().CR_ROLE = cfg.role or "user"
+        launch(3)
+        closeLoading()
     else
+        -- İlk giriş: kısa loading, sonra (dil seçimi ->) key menüsü
+        task.wait(0.6)
+        closeLoading()
         openGate()
     end
 end
@@ -521,7 +584,6 @@ end
 local ok, err = pcall(start)
 if not ok then
     warn("[cr-game] start error: " .. tostring(err))
-    -- Son çare: kayıtlı veriyi sıfırlayıp key ekranını aç
     local ok2, err2 = pcall(function()
         cfg = {}
         openGate()
