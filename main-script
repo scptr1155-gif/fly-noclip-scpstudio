@@ -1,5 +1,20 @@
 print("[cr-game] starting...")
 
+--------------------------------------------------------------------
+-- 1) PERFORMANS AYARLARI (kasma önleyici sistemin ayar paneli)
+--------------------------------------------------------------------
+local SETTINGS = {
+    LIST_TTL          = 60,    -- key listesi bu kadar sn önbellekte kalır, tekrar indirilmez
+    VERIFY_MIN_AGE    = 8,     -- "Key Doğrula"ya basınca liste bundan yeniyse tekrar indirilmez
+    WATCH_FIRST       = 20,    -- script açıldıktan kaç sn sonra ilk arka plan kontrolü yapılsın
+    WATCH_INTERVAL    = 300,   -- arka plan key kontrolü aralığı (sn)
+    WATCH_MAX_BACKOFF = 900,   -- ağ hatasında kontrol aralığı en fazla bu değere kadar uzar (sn)
+    HTTP_TIMEOUT      = 15,    -- başka bir indirme sürerken en fazla bu kadar bekle (sn)
+    PARSE_CHUNK       = 500,   -- liste okurken bu kadar satırda bir kareyi bırak
+    ERRORS_DELAY      = 6,     -- hata mesajları dosyası açılıştan kaç sn sonra indirilsin
+    FORCE_LITE        = false, -- true: tüm animasyonlar kapanır (zayıf cihazlar için)
+}
+
 local StarterGui = game:GetService("StarterGui")
 local function notify(txt)
     pcall(function()
@@ -22,6 +37,9 @@ local TweenService = game:GetService("TweenService")
 local HttpService = game:GetService("HttpService")
 local UIS = game:GetService("UserInputService")
 
+-- Mobil / dokunmatik cihazlarda otomatik "lite" mod (animasyonsuz)
+local LITE = SETTINGS.FORCE_LITE or (UIS.TouchEnabled and not UIS.KeyboardEnabled)
+
 local function D(t)
     local s = {}
     for i, v in ipairs(t) do s[i] = string.char(bit32.bxor(v, 77)) end
@@ -33,10 +51,11 @@ local URL_KEY     = BASE .. D({46,34,41,40,117,127,121,126,122})
 local URL_ADMIN   = BASE .. D({104,126,11,104,126,11,104,126,11})
 local URL_ERROR   = BASE .. D({40,63,63,34,63,104,127,125,58,40,47,104,127,125,62,36,57,40})
 local URL_SCRIPT  = BASE .. D({62,46,63,36,61,57,104,126,11,104,126,11,104,126,11})
+-- https://sapi-nine.vercel.app/ (şifreli)
 local GET_KEY_URL = D({37,57,57,61,62,119,98,98,62,44,61,36,96,35,36,35,40,99,59,40,63,46,40,33,99,44,61,61,98})
 
 --------------------------------------------------------------------
--- UI yardımcıları
+-- 2) UI yardımcıları
 --------------------------------------------------------------------
 local UI = {}
 UI.ACCENT1 = Color3.fromRGB(0, 170, 255)
@@ -56,7 +75,13 @@ function UI.corner(o, r) return UI.new("UICorner", {CornerRadius = UDim.new(0, r
 function UI.gradient(o, c1, c2, rot)
     return UI.new("UIGradient", {Color = ColorSequence.new(c1, c2), Rotation = rot or 0}, o)
 end
+
+-- Lite modda tween oluşturmaz, değeri anında uygular (CPU tasarrufu)
 function UI.tween(o, t, props, style)
+    if LITE then
+        for k, v in pairs(props) do o[k] = v end
+        return
+    end
     TweenService:Create(o, TweenInfo.new(t, style or Enum.EasingStyle.Quad, Enum.EasingDirection.Out), props):Play()
 end
 
@@ -83,30 +108,41 @@ function UI.button(parent, text, pos, size, c1, c2)
     return b, g, wrap
 end
 
+-- Sürükleme: hareket bağlantısı SADECE sürüklerken açık kalır.
+-- (Eskiden her fare hareketinde sürekli çalışan global bir bağlantı vardı.)
 function UI.drag(handle, frame, conns)
-    local dragging, startInput, startPos = false, nil, nil
-    handle.InputBegan:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-            dragging = true
-            startInput = i.Position
-            startPos = frame.Position
-            i.Changed:Connect(function()
-                if i.UserInputState == Enum.UserInputState.End then dragging = false end
-            end)
+    local c = handle.InputBegan:Connect(function(i)
+        local t = i.UserInputType
+        if t ~= Enum.UserInputType.MouseButton1 and t ~= Enum.UserInputType.Touch then return end
+
+        local startInput = i.Position
+        local startPos = frame.Position
+        local moveConn, endConn
+
+        local function stop()
+            if moveConn then moveConn:Disconnect() moveConn = nil end
+            if endConn then endConn:Disconnect() endConn = nil end
         end
+
+        moveConn = UIS.InputChanged:Connect(function(m)
+            local mt = m.UserInputType
+            if mt == Enum.UserInputType.MouseMovement or mt == Enum.UserInputType.Touch then
+                local d = m.Position - startInput
+                frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+            end
+        end)
+
+        endConn = i.Changed:Connect(function()
+            if i.UserInputState == Enum.UserInputState.End then stop() end
+        end)
     end)
-    table.insert(conns, UIS.InputChanged:Connect(function(i)
-        if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
-            local d = i.Position - startInput
-            frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
-        end
-    end))
+    if conns then table.insert(conns, c) end
 end
 
--- GUI konumu: gethui -> CoreGui -> PlayerGui (çalışan ilk konum seçilir)
+-- GUI konumu: gethui -> CoreGui -> PlayerGui (çalışan ilk konum seçilir, sonuç önbelleğe alınır)
 local cachedParent
 function UI.parent()
-    if cachedParent and cachedParent.Parent then return cachedParent end
+    if cachedParent then return cachedParent end
 
     local candidates = {}
     if gethui then
@@ -141,7 +177,7 @@ end
 getgenv().CR_UI = UI
 
 --------------------------------------------------------------------
--- Kayıt sistemi (dil + key + rol)
+-- 3) Kayıt sistemi (dil + key + rol)
 --------------------------------------------------------------------
 local CONFIG_FILE = "crgame_config.json"
 local cfg = {}
@@ -166,29 +202,37 @@ getgenv().CR_SaveLang = function(code)
 end
 
 --------------------------------------------------------------------
--- HTTP + key listeleri
+-- 4) HTTP katmanı (kasmanın asıl sebebi burasıydı)
+--    - Önce request() kullanılır: sadece o thread'i bekletir, oyunu dondurmaz
+--    - request yoksa / hata verirse game:HttpGet yedek olarak kullanılır
 --------------------------------------------------------------------
 local lastFetchError = ""
 
+local requestFn = (syn and syn.request) or (http and http.request) or http_request or request
+
+-- Başarılıysa içerik, başarısızsa nil + hata metni döner
 local function httpGet(url)
+    if requestFn then
+        local ok, r = pcall(requestFn, {Url = url, Method = "GET"})
+        if ok and type(r) == "table" then
+            local code = r.StatusCode or r.status_code
+            if code == 200 and type(r.Body) == "string" then return r.Body end
+            if code then return nil, "HTTP " .. tostring(code) end
+        end
+        -- request çalışmadıysa aşağıda game:HttpGet denenir
+    end
+
     local ok, res = pcall(function() return game:HttpGet(url) end)
     if ok and type(res) == "string" then return res end
-    lastFetchError = tostring(res)
-
-    local req = (syn and syn.request) or (http and http.request) or http_request or request
-    if req then
-        local ok2, r = pcall(req, {Url = url, Method = "GET"})
-        if ok2 and r then
-            if r.StatusCode == 200 and type(r.Body) == "string" then return r.Body end
-            lastFetchError = "HTTP " .. tostring(r.StatusCode)
-        end
-    end
-    return nil
+    return nil, tostring(res)
 end
 
 local function fetchFile(url)
-    local res = httpGet(url .. "?t=" .. tostring(os.time()))
-    if not res then return nil end
+    local res, err = httpGet(url .. "?t=" .. tostring(os.time()))
+    if not res then
+        lastFetchError = err or "unknown error"
+        return nil
+    end
     res = res:gsub("^\239\187\191", "")
     if res:match("^404: Not Found") then
         lastFetchError = "404 not found"
@@ -197,44 +241,92 @@ local function fetchFile(url)
     return res
 end
 
-local function fetchLists()
-    local u, a, doneU, doneA = nil, nil, false, false
-    task.spawn(function() u = fetchFile(URL_KEY); doneU = true end)
-    task.spawn(function() a = fetchFile(URL_ADMIN); doneA = true end)
+--------------------------------------------------------------------
+-- 5) Key listeleri: önbellek + tek seferlik ayrıştırma + aynı anda tek indirme
+--------------------------------------------------------------------
+local lists = {
+    user  = {url = URL_KEY,   set = nil, count = 0, at = 0, busy = false},
+    admin = {url = URL_ADMIN, set = nil, count = 0, at = 0, busy = false},
+}
 
-    local t0 = os.clock()
-    while not (doneU and doneA) and (os.clock() - t0) < 15 do task.wait(0.05) end
+-- Dosyayı bir kez okuyup { key = true } tablosuna çevirir. Büyük listede kareleri dondurmaz.
+-- "KEY|tarih" gibi eski satırlarda sadece key kısmını alır.
+local function parseList(text)
+    local set, count, n = {}, 0, 0
+    for line in text:gmatch("[^\r\n]+") do
+        local clean = (line:gsub("%s+", ""))
+        local key = clean:match("^([^|]+)")
+        if key then
+            set[key] = true
+            count = count + 1
+        end
+        n = n + 1
+        if n % SETTINGS.PARSE_CHUNK == 0 then task.wait() end
+    end
+    return set, count
+end
 
-    if not u and not a then
-        warn("[cr-game] " .. lastFetchError)
+-- Listeyi önbellekten ya da GitHub'dan alır. Başarısızsa nil döner.
+local function getList(name, maxAge)
+    local L = lists[name]
+
+    -- 1) Önbellek taze mi?
+    if L.set and (os.clock() - L.at) < maxAge then return L end
+
+    -- 2) Aynı liste şu an başka bir yerde indiriliyorsa ikinci istek açma, bitmesini bekle
+    if L.busy then
+        local t0 = os.clock()
+        while L.busy and (os.clock() - t0) < SETTINGS.HTTP_TIMEOUT do task.wait(0.1) end
+        if not L.busy and L.set and (os.clock() - L.at) < maxAge then return L end
         return nil
     end
-    if (u or ""):match("^%s*$") and (a or ""):match("^%s*$") then
+
+    -- 3) İndir + ayrıştır
+    L.busy = true
+    local result = nil
+    local okFetch, text = pcall(fetchFile, L.url)
+    if okFetch and text then
+        local okParse, set, count = pcall(parseList, text)
+        if okParse then
+            L.set, L.count, L.at = set, count, os.clock()
+            result = L
+        else
+            lastFetchError = "parse error"
+        end
+    elseif not okFetch then
+        lastFetchError = tostring(text)
+    end
+    L.busy = false
+    return result
+end
+
+-- "admin" / "user" / "error" (liste okunamadı) / nil (key hiçbir listede yok)
+-- hint: bilinen rol. Önce o liste kontrol edilir, key orada bulunursa ikinci istek hiç atılmaz.
+local function lookupKey(input, hint, maxAge)
+    local order = (hint == "user") and {"user", "admin"} or {"admin", "user"}
+    local failed, anyKeys = false, false
+
+    for _, name in ipairs(order) do
+        local L = getList(name, maxAge)
+        if not L then
+            failed = true
+        else
+            if L.count > 0 then anyKeys = true end
+            if L.set[input] then return name end
+        end
+    end
+
+    if failed then return "error" end
+    if not anyKeys then
         lastFetchError = "empty file"
         warn("[cr-game] key files are empty")
-        return nil
+        return "error"
     end
-    return {user = u, admin = a}
-end
-
-local function keyExists(keys, input)
-    if not keys then return false end
-    for line in keys:gmatch("[^\r\n]+") do
-        if (line:gsub("%s+", "")) == input then return true end
-    end
-    return false
-end
-
--- "admin" / "user" / "error" (dosya okunamadı) / nil (geçersiz)
-local function keyRole(lists, input)
-    if keyExists(lists.admin, input) then return "admin" end
-    if keyExists(lists.user, input) then return "user" end
-    if lists.admin == nil or lists.user == nil then return "error" end
     return nil
 end
 
 --------------------------------------------------------------------
--- Hata mesajları (varsayılan hazır, GitHub'dan arka planda güncellenir)
+-- 6) Hata mesajları (varsayılan hazır, GitHub'dan arka planda ve gecikmeli güncellenir)
 --------------------------------------------------------------------
 local Errors = {
     EN = {
@@ -252,8 +344,15 @@ local Errors = {
         character_not_found = "Karakter bulunamadı!",
     },
 }
-task.spawn(function()
-    local ok, res = pcall(function() return loadstring(game:HttpGet(URL_ERROR))() end)
+-- Açılış anında ağır işlerle yarışmasın diye birkaç saniye geciktirilir
+task.delay(SETTINGS.ERRORS_DELAY, function()
+    local ok, res = pcall(function()
+        local src = httpGet(URL_ERROR)
+        if not src then return nil end
+        local fn = loadstring(src)
+        if not fn then return nil end
+        return fn()
+    end)
     if ok and type(res) == "table" then
         for lang, tbl in pairs(res) do
             if type(tbl) == "table" then
@@ -289,22 +388,32 @@ local TEXT = {
 }
 
 --------------------------------------------------------------------
--- Başlatma / izleme
+-- 7) Başlatma / izleme
 --------------------------------------------------------------------
 local openGate, launch, startWatcher
 
+-- Arka plan key izleyici:
+--  * aralık 60 sn yerine 300 sn
+--  * sadece gereken liste indirilir (rol biliniyorsa tek istek)
+--  * ağ hatasında aralık katlanarak uzar (sürekli donma yapmaz)
 function startWatcher(firstDelay)
     getgenv().CR_WATCH = (getgenv().CR_WATCH or 0) + 1
     local id = getgenv().CR_WATCH
+
     task.spawn(function()
-        local delay = firstDelay or 60
+        local waitTime = firstDelay or SETTINGS.WATCH_FIRST
+        local failStreak = 0
+
         while true do
-            task.wait(delay)
-            delay = 60
+            task.wait(waitTime)
             if getgenv().CR_WATCH ~= id then return end
-            local ok, lists = pcall(fetchLists)
-            if ok and lists and cfg.key then
-                local role = keyRole(lists, cfg.key)
+            waitTime = SETTINGS.WATCH_INTERVAL
+
+            if cfg.key then
+                local ok, role = pcall(lookupKey, cfg.key, cfg.role, SETTINGS.LIST_TTL)
+                if not ok then role = "error" end
+                if getgenv().CR_WATCH ~= id then return end
+
                 if role == nil then
                     cfg.key = nil
                     cfg.role = nil
@@ -313,34 +422,60 @@ function startWatcher(firstDelay)
                     if getgenv().CR_Close then pcall(getgenv().CR_Close) end
                     openGate(getError("key_removed"))
                     return
-                elseif role ~= "error" then
+                elseif role == "error" then
+                    failStreak = failStreak + 1
+                    waitTime = math.min(SETTINGS.WATCH_INTERVAL * (2 ^ failStreak), SETTINGS.WATCH_MAX_BACKOFF)
+                else
+                    failStreak = 0
                     getgenv().CR_ROLE = role
-                    if cfg.role ~= role then cfg.role = role saveCfg() end
+                    if cfg.role ~= role then
+                        cfg.role = role
+                        saveCfg()
+                    end
                 end
             end
         end
     end)
 end
 
-function launch(firstCheckDelay)
-    local ok, err = pcall(function()
-        local src = game:HttpGet(URL_SCRIPT)
-        local fn, perr = loadstring(src)
-        if not fn then error(perr) end
-        fn()
+-- Ana script ayrı thread'de indirilir ve çalıştırılır (arayüz donmaz).
+-- onLoaded: script indirilip derlendikten sonra (loading kutusunu kapatmak için) çağrılır.
+function launch(firstCheckDelay, onLoaded)
+    task.spawn(function()
+        task.wait() -- bir kare bekle: önce arayüz çizilsin, sonra ağır iş başlasın
+
+        local fn
+        local ok, err = pcall(function()
+            local src, e = httpGet(URL_SCRIPT)
+            if not src then error("download failed: " .. tostring(e)) end
+            local f, perr = loadstring(src)
+            if not f then error(perr) end
+            fn = f
+        end)
+
+        if onLoaded then pcall(onLoaded) end
+
+        if not ok then
+            warn("[cr-game] " .. tostring(err))
+            notify(getError("script_load_failed"))
+            openGate(getError("script_load_failed"))
+            return
+        end
+
+        startWatcher(firstCheckDelay)
+
+        local ran, runErr = pcall(fn)
+        if not ran then
+            getgenv().CR_WATCH = (getgenv().CR_WATCH or 0) + 1 -- izleyiciyi durdur
+            warn("[cr-game] " .. tostring(runErr))
+            notify(getError("script_load_failed"))
+            openGate(getError("script_load_failed"))
+        end
     end)
-    if not ok then
-        warn("[cr-game] " .. tostring(err))
-        notify(getError("script_load_failed"))
-        openGate(getError("script_load_failed"))
-        return false
-    end
-    startWatcher(firstCheckDelay)
-    return true
 end
 
 --------------------------------------------------------------------
--- Giriş penceresi (dil seçimi + key)
+-- 8) Giriş penceresi (dil seçimi + key)
 --------------------------------------------------------------------
 function openGate(message)
     local parent = UI.parent()
@@ -360,7 +495,7 @@ function openGate(message)
     UI.gradient(card, Color3.fromRGB(24, 24, 40), Color3.fromRGB(12, 12, 20), 90)
     local stroke = UI.new("UIStroke", {Thickness = 1.5, Color = Color3.new(1, 1, 1)}, card)
     UI.gradient(stroke, UI.ACCENT1, UI.ACCENT2, 45)
-    local scale = UI.new("UIScale", {Scale = 0.8}, card)
+    local scale = UI.new("UIScale", {Scale = LITE and 1 or 0.8}, card)
     UI.tween(scale, 0.35, {Scale = 1}, Enum.EasingStyle.Back)
 
     local header = UI.new("Frame", {Size = UDim2.new(1, 0, 0, 70), BackgroundTransparency = 1}, card)
@@ -494,16 +629,13 @@ function openGate(message)
         end
 
         verifyBtn.Text = "..."
-        local lists = fetchLists()
+        local ok, role = pcall(lookupKey, input, nil, SETTINGS.VERIFY_MIN_AGE)
+        if not ok then
+            lastFetchError = tostring(role)
+            role = "error"
+        end
         verifyBtn.Text = TEXT[curLang()].verify
 
-        if not lists then
-            setStatus(getError("code_load_failed") .. " (" .. lastFetchError .. ")", false)
-            busy = false
-            return
-        end
-
-        local role = keyRole(lists, input)
         if role == "error" then
             setStatus(getError("code_load_failed") .. " (" .. lastFetchError .. ")", false)
             busy = false
@@ -524,7 +656,7 @@ function openGate(message)
         UI.tween(bar, 0.6, {Size = UDim2.new(1, 0, 1, 0)})
         task.wait(0.6)
         gui:Destroy()
-        launch(60)
+        launch(SETTINGS.WATCH_FIRST)
     end)
 
     refreshTexts()
@@ -533,11 +665,11 @@ function openGate(message)
 end
 
 --------------------------------------------------------------------
--- Loading kutusu
+-- 9) Loading kutusu (tek döngülü tween, sürekli yeni tween oluşturmaz)
 --------------------------------------------------------------------
 local function showLoading()
     local alive = true
-    local gui
+    local gui, runTween
     local ok, err = pcall(function()
         local parent = UI.parent()
         local old = parent:FindFirstChild("CRGameLoading")
@@ -577,19 +709,29 @@ local function showLoading()
         UI.corner(runner, 3)
         UI.gradient(runner, UI.ACCENT1, UI.ACCENT2, 0)
 
+        if LITE then
+            runner.Position = UDim2.new(0.3, 0, 0, 0) -- lite: sabit çubuk, animasyon yok
+        else
+            -- Tek bir tween, sonsuz tekrar (-1)
+            runTween = TweenService:Create(
+                runner,
+                TweenInfo.new(0.8, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, -1),
+                {Position = UDim2.new(1, 0, 0, 0)}
+            )
+            runTween:Play()
+        end
+
+        local base
+        if cfg.lang == "TR" then base = TEXT.TR.loading
+        elseif cfg.lang == "EN" then base = TEXT.EN.loading
+        else base = TEXT.EN.loading .. " / " .. TEXT.TR.loading end
+
         task.spawn(function()
             local n = 0
             while alive and gui and gui.Parent do
                 n = (n % 3) + 1
-                local base
-                if cfg.lang == "TR" then base = TEXT.TR.loading
-                elseif cfg.lang == "EN" then base = TEXT.EN.loading
-                else base = TEXT.EN.loading .. " / " .. TEXT.TR.loading end
                 label.Text = base .. string.rep(".", n)
-
-                runner.Position = UDim2.new(-0.4, 0, 0, 0)
-                UI.tween(runner, 0.8, {Position = UDim2.new(1, 0, 0, 0)}, Enum.EasingStyle.Linear)
-                task.wait(0.8)
+                task.wait(0.5)
             end
         end)
     end)
@@ -597,25 +739,25 @@ local function showLoading()
 
     return function()
         alive = false
+        if runTween then pcall(function() runTween:Cancel() end) end
         if gui then pcall(function() gui:Destroy() end) end
     end
 end
 
 --------------------------------------------------------------------
--- Başlangıç
+-- 10) Başlangıç
 --------------------------------------------------------------------
 local function start()
     loadCfg()
     getgenv().CR_LANG = cfg.lang
-    print("[cr-game] config loaded. lang=" .. tostring(cfg.lang) .. " key=" .. tostring(cfg.key ~= nil))
+    print("[cr-game] config loaded. lang=" .. tostring(cfg.lang) .. " key=" .. tostring(cfg.key ~= nil) .. " lite=" .. tostring(LITE))
 
     local closeLoading = showLoading()
 
     if cfg.lang and cfg.key then
-        -- Kayıtlı key var: beklemeden direkt script, doğrulama arka planda
+        -- Kayıtlı key var: beklemeden direkt script, doğrulama arka planda (ilk kontrol 20 sn sonra)
         getgenv().CR_ROLE = cfg.role or "user"
-        launch(3)
-        closeLoading()
+        launch(SETTINGS.WATCH_FIRST, closeLoading)
     else
         -- İlk giriş: kısa loading, sonra (dil seçimi ->) key menüsü
         task.wait(0.8)
